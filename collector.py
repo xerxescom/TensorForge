@@ -9,6 +9,7 @@ import json
 import csv
 import subprocess
 import sys
+import platform
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -103,6 +104,10 @@ class BenchmarkResult:
     start_time: str
     end_time: str
     duration_s: float
+    status: str = "success"
+    error: Optional[str] = None
+    environment: dict = field(default_factory=dict)
+    config: dict = field(default_factory=dict)
 
     # 性能指标 (由子类填充)
     metrics: dict = field(default_factory=dict)
@@ -127,13 +132,18 @@ class GPUSampler:
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._query_count = 0
+        self._error_count = 0
+        self._timeout_count = 0
+        self._query_latency_ms: list[float] = []
+        self._last_error: Optional[str] = None
 
     # ------------------------------------------------------------------ #
     #  nvidia-smi 查询                                                    #
     # ------------------------------------------------------------------ #
-    def _query(self) -> Optional[GPUSample]:
+    def _query(self) -> tuple[Optional[GPUSample], Optional[str], float]:
         if NVIDIA_SMI is None:
-            return None
+            return None, "nvidia-smi unavailable", 0.0
 
         fields = (
             "utilization.gpu,"
@@ -150,6 +160,7 @@ class GPUSampler:
             f"--query-gpu={fields}",
             "--format=csv,noheader,nounits",
         ]
+        t0 = time.perf_counter()
         try:
             out = subprocess.check_output(
                 cmd,
@@ -165,6 +176,7 @@ class GPUSampler:
                 except (ValueError, TypeError):
                     return default
 
+            latency_ms = (time.perf_counter() - t0) * 1000
             return GPUSample(
                 timestamp=time.time(),
                 gpu_util=safe(vals[0]),
@@ -174,9 +186,13 @@ class GPUSampler:
                 temp_c=safe(vals[4]),
                 sm_clock_mhz=safe(vals[5]),
                 mem_clock_mhz=safe(vals[6]),
-            )
-        except Exception:
-            return None
+            ), None, latency_ms
+        except subprocess.TimeoutExpired:
+            latency_ms = (time.perf_counter() - t0) * 1000
+            return None, "nvidia-smi query timeout", latency_ms
+        except Exception as e:
+            latency_ms = (time.perf_counter() - t0) * 1000
+            return None, str(e), latency_ms
 
     # ------------------------------------------------------------------ #
     #  生命周期                                                           #
@@ -185,6 +201,11 @@ class GPUSampler:
         self._stop_event.clear()
         with self._lock:
             self._samples.clear()
+        self._query_count = 0
+        self._error_count = 0
+        self._timeout_count = 0
+        self._query_latency_ms.clear()
+        self._last_error = None
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
@@ -197,10 +218,17 @@ class GPUSampler:
 
     def _loop(self):
         while not self._stop_event.is_set():
-            sample = self._query()
+            sample, error, latency_ms = self._query()
+            self._query_count += 1
+            self._query_latency_ms.append(round(latency_ms, 3))
             if sample:
                 with self._lock:
                     self._samples.append(sample)
+            else:
+                self._error_count += 1
+                if error == "nvidia-smi query timeout":
+                    self._timeout_count += 1
+                self._last_error = error
             self._stop_event.wait(self.interval_s)
 
     # ------------------------------------------------------------------ #
@@ -208,20 +236,21 @@ class GPUSampler:
     # ------------------------------------------------------------------ #
     @staticmethod
     def summarize(samples: list[GPUSample]) -> dict:
-        if not samples:
-            return {}
-
         def _stats(values):
             if not values:
                 return {}
             s = sorted(values)
             n = len(s)
+            p95_idx = min(max(int(n * 0.95), 0), n - 1)
             return {
                 "mean": round(sum(s) / n, 2),
                 "max": round(s[-1], 2),
                 "min": round(s[0], 2),
-                "p95": round(s[int(n * 0.95)], 2),
+                "p95": round(s[p95_idx], 2),
             }
+
+        if not samples:
+            return {"sample_count": 0}
 
         return {
             "gpu_util_%":    _stats([s.gpu_util for s in samples]),
@@ -230,6 +259,25 @@ class GPUSampler:
             "mem_used_mb":   _stats([s.mem_used_mb for s in samples]),
             "sm_clock_mhz":  _stats([s.sm_clock_mhz for s in samples]),
             "sample_count":  len(samples),
+        }
+
+    def health(self) -> dict:
+        avg_latency = (
+            round(sum(self._query_latency_ms) / len(self._query_latency_ms), 3)
+            if self._query_latency_ms else 0.0
+        )
+        drop_rate = (
+            round(self._error_count / self._query_count, 4)
+            if self._query_count else 0.0
+        )
+        return {
+            "query_count": self._query_count,
+            "success_count": max(self._query_count - self._error_count, 0),
+            "error_count": self._error_count,
+            "timeout_count": self._timeout_count,
+            "drop_rate": drop_rate,
+            "avg_query_latency_ms": avg_latency,
+            "last_error": self._last_error,
         }
 
 
@@ -256,6 +304,8 @@ class BenchmarkRunner:
         self.precision = precision
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.gpu_index = gpu_index
+        self.sample_interval_s = sample_interval_s
         self.warmup_s = warmup_s
         self.keep_raw_samples = keep_raw_samples
         self._sampler = GPUSampler(sample_interval_s, gpu_index)
@@ -278,9 +328,17 @@ class BenchmarkRunner:
         self._sampler.start()
         start_ts = time.time()
         start_str = datetime.now().isoformat(timespec="seconds")
+        metrics = {}
+        status = "success"
+        error = None
 
         print(f"[{self.task_name}] Running task ...")
-        metrics = self.run_task()
+        try:
+            metrics = self.run_task()
+        except Exception as e:
+            status = "failed"
+            error = str(e)
+            print(f"[{self.task_name}] [error] {error}")
 
         end_ts = time.time()
         end_str = datetime.now().isoformat(timespec="seconds")
@@ -289,6 +347,7 @@ class BenchmarkRunner:
         # 派生功耗效率指标
         duration = round(end_ts - start_ts, 3)
         gpu_stats = GPUSampler.summarize(samples)
+        gpu_stats["sampler_health"] = self._sampler.health()
         metrics = self._enrich_efficiency(metrics, gpu_stats, duration)
 
         result = BenchmarkResult(
@@ -298,6 +357,10 @@ class BenchmarkRunner:
             start_time=start_str,
             end_time=end_str,
             duration_s=duration,
+            status=status,
+            error=error,
+            environment=self.collect_environment(),
+            config=self.build_config_snapshot(),
             metrics=metrics,
             gpu_stats=gpu_stats,
             raw_samples=(
@@ -331,6 +394,59 @@ class BenchmarkRunner:
                 )
         return metrics
 
+    def collect_environment(self) -> dict:
+        env = {
+            "platform": platform.platform(),
+            "python_version": sys.version.split()[0],
+            "gpu_index": self.gpu_index,
+            "sample_interval_s": self.sample_interval_s,
+            "nvidia_smi": NVIDIA_SMI,
+        }
+        if NVIDIA_SMI:
+            try:
+                out = subprocess.check_output(
+                    [
+                        NVIDIA_SMI,
+                        f"--id={self.gpu_index}",
+                        "--query-gpu=name,driver_version,memory.total,power.limit",
+                        "--format=csv,noheader,nounits",
+                    ],
+                    stderr=subprocess.DEVNULL,
+                    timeout=3,
+                    **_subprocess_kwargs(),
+                ).decode().strip()
+                vals = [v.strip() for v in out.split(",")]
+                if len(vals) >= 4:
+                    env["gpu"] = {
+                        "name": vals[0],
+                        "driver_version": vals[1],
+                        "memory_total_mb": vals[2],
+                        "power_limit_w": vals[3],
+                    }
+            except Exception as e:
+                env["gpu_probe_error"] = str(e)
+        return env
+
+    def build_config_snapshot(self) -> dict:
+        return {
+            "task_name": self.task_name,
+            "model_name": self.model_name,
+            "precision": self.precision,
+            "output_dir": str(self.output_dir),
+            "gpu_index": self.gpu_index,
+            "sample_interval_s": self.sample_interval_s,
+            "warmup_s": self.warmup_s,
+            "keep_raw_samples": self.keep_raw_samples,
+        }
+
+    @staticmethod
+    def _flatten_scalar_metrics(metrics: dict) -> dict:
+        out = {}
+        for k, v in metrics.items():
+            if isinstance(v, (int, float, str, bool)) or v is None:
+                out[f"metric_{k}"] = v
+        return out
+
     def _save(self, result: BenchmarkResult):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         stem = f"{self.task_name}_{self.model_name}_{self.precision}_{ts}"
@@ -346,14 +462,16 @@ class BenchmarkRunner:
             "task": result.task_name,
             "model": result.model_name,
             "precision": result.precision,
+            "status": result.status,
             "start_time": result.start_time,
             "duration_s": result.duration_s,
-            **{f"metric_{k}": v for k, v in result.metrics.items()},
+            **self._flatten_scalar_metrics(result.metrics),
             "gpu_util_mean": result.gpu_stats.get("gpu_util_%", {}).get("mean"),
             "power_mean_w": result.gpu_stats.get("power_w", {}).get("mean"),
             "power_max_w": result.gpu_stats.get("power_w", {}).get("max"),
             "temp_max_c": result.gpu_stats.get("temp_c", {}).get("max"),
             "mem_used_max_mb": result.gpu_stats.get("mem_used_mb", {}).get("max"),
+            "sampler_drop_rate": result.gpu_stats.get("sampler_health", {}).get("drop_rate"),
         }
         write_header = not csv_path.exists()
         with open(csv_path, "a", newline="", encoding="utf-8") as f:

@@ -6,8 +6,7 @@ LLM 推理速度测试
 import time
 import subprocess
 import sys
-import json
-from core.collector import BenchmarkRunner, _subprocess_kwargs
+from collector import BenchmarkRunner, _subprocess_kwargs
 
 IS_WINDOWS = sys.platform == "win32"
 
@@ -69,14 +68,30 @@ class LLMBenchmark(BenchmarkRunner):
         # 聚合
         ttfts       = [r["ttft_s"]       for r in run_results if r["ttft_s"] > 0]
         tps_list    = [r["tokens_per_s"]  for r in run_results if r["tokens_per_s"] > 0]
+        elapsed_list = [r["total_elapsed_s"] for r in run_results if r["total_elapsed_s"] > 0]
         total_toks  = sum(r["tokens_generated"] for r in run_results)
+        success_count = sum(1 for r in run_results if not r.get("error"))
+
+        def _percentile(values: list[float], q: float) -> float:
+            if not values:
+                return 0
+            s = sorted(values)
+            idx = min(max(int(len(s) * q), 0), len(s) - 1)
+            return round(s[idx], 4 if q < 1 else 2)
 
         return {
+            "success_count":       success_count,
+            "failure_count":       len(run_results) - success_count,
+            "success_rate":        round(success_count / len(run_results), 4) if run_results else 0,
             "tokens_per_s_mean":  round(sum(tps_list) / len(tps_list), 2) if tps_list else 0,
             "tokens_per_s_max":   round(max(tps_list), 2) if tps_list else 0,
             "tokens_per_s_min":   round(min(tps_list), 2) if tps_list else 0,
+            "tokens_per_s_p50":   _percentile(tps_list, 0.50),
+            "tokens_per_s_p95":   _percentile(tps_list, 0.95),
             "ttft_s_mean":        round(sum(ttfts) / len(ttfts), 4) if ttfts else 0,
             "ttft_s_min":         round(min(ttfts), 4) if ttfts else 0,
+            "ttft_s_p95":         _percentile(ttfts, 0.95),
+            "response_elapsed_s_mean": round(sum(elapsed_list) / len(elapsed_list), 4) if elapsed_list else 0,
             "tokens_generated":   total_toks,
             "n_runs":             len(run_results),
             "per_run_detail":     run_results,
@@ -96,20 +111,44 @@ class LLMBenchmark(BenchmarkRunner):
         tokens_per_s = 0.0
         tokens_generated = 0
         t_start = time.perf_counter()
+        total_elapsed_s = 0.0
+        output_text = ""
+        error = None
 
         try:
-            # Windows 必须用 communicate()，Linux 也兼容
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=120,
+                bufsize=1,
                 **_subprocess_kwargs(),
             )
-            ttft_s = round(time.perf_counter() - t_start, 4)  # Windows fallback: 总时间近似
+            first_chunk = ""
+            while True:
+                ch = proc.stdout.read(1) if proc.stdout else ""
+                if ch:
+                    first_chunk = ch
+                    ttft_s = round(time.perf_counter() - t_start, 4)
+                    break
+                if proc.poll() is not None:
+                    break
+
+            try:
+                remaining_out, remaining_err = proc.communicate(timeout=120)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                remaining_out, remaining_err = proc.communicate()
+                raise
+
+            output_text = first_chunk + (remaining_out or "")
+            total_elapsed_s = round(time.perf_counter() - t_start, 4)
+
+            if ttft_s == 0 and output_text:
+                ttft_s = total_elapsed_s
 
             # 解析 ollama verbose stderr 统计行
-            for line in proc.stderr.splitlines():
+            for line in (remaining_err or "").splitlines():
                 line = line.strip()
                 if "eval rate:" in line:
                     try:
@@ -125,24 +164,31 @@ class LLMBenchmark(BenchmarkRunner):
                         pass
 
             # 如果 --verbose 没有输出 eval rate（旧版 ollama），用输出字数粗估
-            if tokens_per_s == 0 and proc.stdout:
-                elapsed = time.perf_counter() - t_start
-                est_tokens = int(len(proc.stdout.split()) * 1.3)
-                tokens_per_s = round(est_tokens / elapsed, 2) if elapsed > 0 else 0
+            if tokens_per_s == 0 and output_text:
+                decode_elapsed = max(total_elapsed_s - ttft_s, 1e-6)
+                est_tokens = int(len(output_text.split()) * 1.3)
+                tokens_per_s = round(est_tokens / decode_elapsed, 2) if decode_elapsed > 0 else 0
                 tokens_generated = tokens_generated or est_tokens
 
         except FileNotFoundError:
+            error = "ollama_not_found"
             print("  [warn] ollama not found. Install from https://ollama.com")
         except subprocess.TimeoutExpired:
+            error = "ollama_timeout"
+            total_elapsed_s = round(time.perf_counter() - t_start, 4)
             print("  [warn] ollama run timed out (120s)")
         except Exception as e:
+            error = str(e)
+            total_elapsed_s = round(time.perf_counter() - t_start, 4)
             print(f"  [warn] ollama error: {e}")
 
         return {
             "prompt_preview": prompt[:60] + "...",
             "ttft_s": ttft_s,
+            "total_elapsed_s": total_elapsed_s,
             "tokens_per_s": tokens_per_s,
             "tokens_generated": tokens_generated,
+            "error": error,
         }
 
 
@@ -176,25 +222,37 @@ class LLMContextScaleBenchmark(BenchmarkRunner):
             n_words = int(ctx_len / 1.3)
             prompt = (base_word * (n_words // len(base_word.split()) + 1))
             prompt = " ".join(prompt.split()[:n_words])
+            full_prompt = (
+                "Read the following context carefully and reply with exactly one word: OK.\n\n"
+                f"{prompt}"
+            )
 
             print(f"  Context scale test: {ctx_len} tokens ...")
-            t0 = time.perf_counter()
-            # 这里简化为计时调用，实际可替换为真实推理
-            try:
-                subprocess.run(
-                    ["ollama", "run", self.model_name, f"Summarize: {prompt[:200]}"],
-                    capture_output=True, text=True, timeout=120,
-                )
-                elapsed = round(time.perf_counter() - t0, 3)
-            except Exception:
-                elapsed = 0.0
+            r = self._single_probe(full_prompt)
 
             scale_results.append({
                 "context_tokens": ctx_len,
-                "elapsed_s": elapsed,
-                "tokens_per_s": round(ctx_len / elapsed, 2) if elapsed > 0 else 0,
+                "prefill_latency_s": r["ttft_s"],
+                "total_elapsed_s": r["total_elapsed_s"],
+                "output_tokens": r["tokens_generated"],
+                "decode_tokens_per_s": r["tokens_per_s"],
+                "error": r["error"],
             })
 
         return {
             "context_scale_curve": scale_results,
         }
+
+    def _single_probe(self, prompt: str) -> dict:
+        bench = LLMBenchmark(
+            model_name=self.model_name,
+            precision=self.precision,
+            prompts=[prompt],
+            n_runs=1,
+            output_dir=str(self.output_dir),
+            gpu_index=self.gpu_index,
+            sample_interval_s=self.sample_interval_s,
+            warmup_s=0,
+            keep_raw_samples=False,
+        )
+        return bench._single_run(prompt)

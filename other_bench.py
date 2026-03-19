@@ -7,7 +7,7 @@ import subprocess
 import sys
 import json
 from pathlib import Path
-from core.collector import BenchmarkRunner, _subprocess_kwargs
+from collector import BenchmarkRunner, _subprocess_kwargs
 
 IS_WINDOWS = sys.platform == "win32"
 

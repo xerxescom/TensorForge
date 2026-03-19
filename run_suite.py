@@ -9,9 +9,7 @@ import threading
 import subprocess
 from pathlib import Path
 from datetime import datetime
-from core.collector import GPUSampler, BenchmarkResult, _subprocess_kwargs
-from dataclasses import asdict
-import csv
+from collector import GPUSampler, _subprocess_kwargs
 
 
 # ─────────────────────────────────────────────────────────────
@@ -53,11 +51,12 @@ class ConcurrentStressTest:
         t0 = time.time()
         threads = []
         concurrent_metrics = [None] * len(self.tasks)
+        barrier = threading.Barrier(len(self.tasks))
 
         for i, task_cfg in enumerate(self.tasks):
             t = threading.Thread(
                 target=self._run_one_task,
-                args=(task_cfg, i, concurrent_metrics),
+                args=(task_cfg, i, concurrent_metrics, barrier),
             )
             threads.append(t)
 
@@ -78,8 +77,9 @@ class ConcurrentStressTest:
             if baseline and conc:
                 for metric in ["tokens_per_s", "it_per_s", "fps"]:
                     if metric in baseline and metric in conc:
-                        ratio = conc[metric] / baseline[metric]
-                        degradation[f"{key}_{metric}_ratio"] = round(ratio, 4)
+                        degradation[f"{key}_{metric}_ratio"] = self._safe_ratio(
+                            conc.get(metric), baseline.get(metric)
+                        )
 
         result = {
             "test_type": "concurrent_stress",
@@ -100,7 +100,13 @@ class ConcurrentStressTest:
         print(f"[Concurrent] Degradation: {json.dumps(degradation, indent=2)}")
         return result
 
-    def _run_one_task(self, cfg: dict, idx: int, results: list):
+    @staticmethod
+    def _safe_ratio(num, den):
+        if num is None or den is None or den <= 0:
+            return None
+        return round(num / den, 4)
+
+    def _run_one_task(self, cfg: dict, idx: int, results: list, barrier: threading.Barrier):
         """在独立线程中跑单个任务"""
         t_type = cfg.get("type", "llm")
         duration = cfg.get("duration_s", 30)
@@ -108,6 +114,7 @@ class ConcurrentStressTest:
         metrics = {"type": t_type, "model": model}
 
         try:
+            barrier.wait()
             if t_type == "llm":
                 metrics.update(self._timed_llm(model, duration))
             elif t_type == "diffusion":
@@ -187,9 +194,9 @@ print(json.dumps({{
             key = f"{cfg['type']}_{cfg.get('model', '')}"
             try:
                 if cfg["type"] == "llm":
-                    m = self._timed_llm(cfg.get("model", ""), cfg.get("duration_s", 20) / 2)
+                    m = self._timed_llm(cfg.get("model", ""), cfg.get("duration_s", 20))
                 elif cfg["type"] == "diffusion":
-                    m = self._timed_diffusion(cfg.get("model", ""), cfg.get("duration_s", 20) / 2)
+                    m = self._timed_diffusion(cfg.get("model", ""), cfg.get("duration_s", 20))
                 else:
                     m = {}
                 baselines[key] = m
@@ -236,8 +243,8 @@ class FullBenchmarkSuite:
         print(f"  Start  : {datetime.now().isoformat(timespec='seconds')}")
         print(f"{'='*60}\n")
 
-        from tasks.llm_bench import LLMBenchmark, LLMContextScaleBenchmark
-        from tasks.other_bench import DiffusionBenchmark, CVBenchmark, ASRBenchmark
+        from llm_bench import LLMBenchmark, LLMContextScaleBenchmark
+        from other_bench import DiffusionBenchmark, CVBenchmark, ASRBenchmark
 
         common = dict(output_dir=str(self.output_dir), gpu_index=self.gpu_index)
 
