@@ -121,6 +121,7 @@ class LLMBenchmark(BenchmarkRunner):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",  # <--- 明确指定使用 UTF-8
                 bufsize=1,
                 **_subprocess_kwargs(),
             )
