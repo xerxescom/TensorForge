@@ -27,7 +27,7 @@ gpu_benchmark/
 
 ```bash
 # 核心（必须）——选择适合你 CUDA 版本的命令
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
 
 # LLM：ollama（Windows / Linux 均支持）
 # Windows: 下载 https://ollama.com/download/windows 安装包
