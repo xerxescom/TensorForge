@@ -48,7 +48,7 @@ pip install faster-whisper soundfile
 
 ```bash
 # Windows（PowerShell 或 CMD）
-python run_suite.py --gpu-name "RTX 4090" --output-dir results\rtx4090
+python run_suite.py --gpu-name "RTX 4070" --output-dir results\rtx4070
 
 # Linux
 python run_suite.py --gpu-name "RTX 4090" --output-dir results/rtx4090

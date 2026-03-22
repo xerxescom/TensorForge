@@ -281,6 +281,26 @@ class GPUSampler:
         }
 
 
+def _enrich_efficiency(metrics: dict, gpu_stats: dict, duration_s: float) -> dict:
+    """自动计算功耗效率指标"""
+    mean_power = gpu_stats.get("power_w", {}).get("mean", 0)
+    if mean_power > 0 and duration_s > 0:
+        energy_j = mean_power * duration_s
+        metrics["energy_j"] = round(energy_j, 2)
+
+        # tokens per joule (LLM)
+        if "tokens_generated" in metrics:
+            metrics["tokens_per_joule"] = round(
+                metrics["tokens_generated"] / energy_j, 4
+            )
+        # iterations per joule (Diffusion)
+        if "total_steps" in metrics:
+            metrics["steps_per_joule"] = round(
+                metrics["total_steps"] / energy_j, 4
+            )
+    return metrics
+
+
 class BenchmarkRunner:
     """
     所有测试任务的基类。
@@ -348,7 +368,7 @@ class BenchmarkRunner:
         duration = round(end_ts - start_ts, 3)
         gpu_stats = GPUSampler.summarize(samples)
         gpu_stats["sampler_health"] = self._sampler.health()
-        metrics = self._enrich_efficiency(metrics, gpu_stats, duration)
+        metrics = _enrich_efficiency(metrics, gpu_stats, duration)
 
         result = BenchmarkResult(
             task_name=self.task_name,
@@ -375,24 +395,6 @@ class BenchmarkRunner:
     # ------------------------------------------------------------------ #
     #  内部工具                                                           #
     # ------------------------------------------------------------------ #
-    def _enrich_efficiency(self, metrics: dict, gpu_stats: dict, duration_s: float) -> dict:
-        """自动计算功耗效率指标"""
-        mean_power = gpu_stats.get("power_w", {}).get("mean", 0)
-        if mean_power > 0 and duration_s > 0:
-            energy_j = mean_power * duration_s
-            metrics["energy_j"] = round(energy_j, 2)
-
-            # tokens per joule (LLM)
-            if "tokens_generated" in metrics:
-                metrics["tokens_per_joule"] = round(
-                    metrics["tokens_generated"] / energy_j, 4
-                )
-            # iterations per joule (Diffusion)
-            if "total_steps" in metrics:
-                metrics["steps_per_joule"] = round(
-                    metrics["total_steps"] / energy_j, 4
-                )
-        return metrics
 
     def collect_environment(self) -> dict:
         env = {
