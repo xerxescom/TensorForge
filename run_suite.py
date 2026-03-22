@@ -309,7 +309,16 @@ class FullBenchmarkSuite:
             "phases": self.all_results,
         }
         report_path = self.output_dir / "final_report.json"
-        report_path.write_text(json.dumps(report, indent=2))
+        # 告诉 json 模块：遇到不认识的对象，就直接调用它的 __dict__ 属性转化为字典
+        json_data = json.dumps(
+            report,
+            indent=2,
+            default=lambda o: o.__dict__
+        )
+
+        # 写入文件，务必带上 utf-8 编码！
+        report_path.write_text(json_data, encoding="utf-8")
+        # report_path.write_text(json.dumps(report, indent=2))
         print(f"\n[Suite] Final report → {report_path}")
         print(f"[Suite] All done. Results in: {self.output_dir}")
 
