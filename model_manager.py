@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import threading
 from urllib.parse import urlparse
 
-from loguru import logger
+from tf_logger import logger
 
 
 @dataclass

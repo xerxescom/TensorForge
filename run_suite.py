@@ -11,7 +11,7 @@ from pathlib import Path
 from datetime import datetime
 from dataclasses import asdict
 
-from loguru import logger
+from tf_logger import logger
 
 from collector import GPUSampler, _subprocess_kwargs
 from config_manager import config_manager

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, Any, List
 from dataclasses import dataclass
 
-from loguru import logger
+from tf_logger import logger
 
 
 @dataclass

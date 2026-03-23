@@ -4,7 +4,7 @@ TensorForge 日志配置
 import sys
 from pathlib import Path
 
-from loguru import logger
+from tf_logger import logger
 
 
 def configure_logging(output_dir: str | None = None, verbose: bool = True):

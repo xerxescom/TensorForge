@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 
-from loguru import logger
+from tf_logger import logger
 
 from collector import BenchmarkRunner, _subprocess_kwargs
 
