@@ -1,0 +1,124 @@
+{
+  "task_name": "cv_detection",
+  "model_name": "yolov8n",
+  "precision": "fp16",
+  "start_time": "2026-03-23T22:57:51",
+  "end_time": "2026-03-23T22:57:55",
+  "duration_s": 3.404,
+  "status": "success",
+  "error": null,
+  "environment": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python_version": "3.13.12",
+    "gpu_index": 0,
+    "sample_interval_s": 0.5,
+    "nvidia_smi": "nvidia-smi",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 4070",
+      "driver_version": "595.79",
+      "memory_total_mb": "12282",
+      "power_limit_w": "200.00"
+    }
+  },
+  "config": {
+    "task_name": "cv_detection",
+    "model_name": "yolov8n",
+    "precision": "fp16",
+    "output_dir": "results\\rtx4070",
+    "gpu_index": 0,
+    "sample_interval_s": 0.5,
+    "warmup_s": 5.0,
+    "keep_raw_samples": true
+  },
+  "metrics": {
+    "n_frames": 200,
+    "image_size": 640,
+    "batch_size": 1,
+    "total_elapsed_s": 3.401,
+    "energy_j": 35.88
+  },
+  "gpu_stats": {
+    "gpu_util_%": {
+      "mean": 7.0,
+      "max": 23.0,
+      "min": 1.0,
+      "p95": 23.0
+    },
+    "power_w": {
+      "mean": 10.54,
+      "max": 11.01,
+      "min": 10.27,
+      "p95": 11.01
+    },
+    "temp_c": {
+      "mean": 36.0,
+      "max": 36.0,
+      "min": 36.0,
+      "p95": 36.0
+    },
+    "mem_used_mb": {
+      "mean": 7921.75,
+      "max": 8050.0,
+      "min": 7877.0,
+      "p95": 8050.0
+    },
+    "sm_clock_mhz": {
+      "mean": 787.5,
+      "max": 2520.0,
+      "min": 210.0,
+      "p95": 2520.0
+    },
+    "sample_count": 4,
+    "sampler_health": {
+      "query_count": 4,
+      "success_count": 4,
+      "error_count": 0,
+      "timeout_count": 0,
+      "drop_rate": 0.0,
+      "avg_query_latency_ms": 54.44,
+      "last_error": null
+    }
+  },
+  "raw_samples": [
+    {
+      "timestamp": 1774277871.912187,
+      "gpu_util": 1.0,
+      "mem_used_mb": 7880.0,
+      "mem_total_mb": 12282.0,
+      "power_w": 10.27,
+      "temp_c": 36.0,
+      "sm_clock_mhz": 210.0,
+      "mem_clock_mhz": 405.0
+    },
+    {
+      "timestamp": 1774277872.9741495,
+      "gpu_util": 2.0,
+      "mem_used_mb": 7880.0,
+      "mem_total_mb": 12282.0,
+      "power_w": 10.36,
+      "temp_c": 36.0,
+      "sm_clock_mhz": 210.0,
+      "mem_clock_mhz": 405.0
+    },
+    {
+      "timestamp": 1774277874.034271,
+      "gpu_util": 2.0,
+      "mem_used_mb": 7877.0,
+      "mem_total_mb": 12282.0,
+      "power_w": 10.53,
+      "temp_c": 36.0,
+      "sm_clock_mhz": 210.0,
+      "mem_clock_mhz": 405.0
+    },
+    {
+      "timestamp": 1774277875.0937908,
+      "gpu_util": 23.0,
+      "mem_used_mb": 8050.0,
+      "mem_total_mb": 12282.0,
+      "power_w": 11.01,
+      "temp_c": 36.0,
+      "sm_clock_mhz": 2520.0,
+      "mem_clock_mhz": 10251.0
+    }
+  ]
+}

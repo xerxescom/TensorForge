@@ -1,0 +1,91 @@
+{
+  "task_name": "asr_whisper",
+  "model_name": "whisper-base",
+  "precision": "float16",
+  "start_time": "2026-03-23T22:58:00",
+  "end_time": "2026-03-23T22:58:00",
+  "duration_s": 0.13,
+  "status": "success",
+  "error": null,
+  "environment": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python_version": "3.13.12",
+    "gpu_index": 0,
+    "sample_interval_s": 0.5,
+    "nvidia_smi": "nvidia-smi",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 4070",
+      "driver_version": "595.79",
+      "memory_total_mb": "12282",
+      "power_limit_w": "200.00"
+    }
+  },
+  "config": {
+    "task_name": "asr_whisper",
+    "model_name": "whisper-base",
+    "precision": "float16",
+    "output_dir": "results\\rtx4070",
+    "gpu_index": 0,
+    "sample_interval_s": 0.5,
+    "warmup_s": 5.0,
+    "keep_raw_samples": true
+  },
+  "metrics": {
+    "note": "asr_not_available",
+    "energy_j": 3.35
+  },
+  "gpu_stats": {
+    "gpu_util_%": {
+      "mean": 0.0,
+      "max": 0.0,
+      "min": 0.0,
+      "p95": 0.0
+    },
+    "power_w": {
+      "mean": 25.77,
+      "max": 25.77,
+      "min": 25.77,
+      "p95": 25.77
+    },
+    "temp_c": {
+      "mean": 36.0,
+      "max": 36.0,
+      "min": 36.0,
+      "p95": 36.0
+    },
+    "mem_used_mb": {
+      "mean": 7876.0,
+      "max": 7876.0,
+      "min": 7876.0,
+      "p95": 7876.0
+    },
+    "sm_clock_mhz": {
+      "mean": 2520.0,
+      "max": 2520.0,
+      "min": 2520.0,
+      "p95": 2520.0
+    },
+    "sample_count": 1,
+    "sampler_health": {
+      "query_count": 1,
+      "success_count": 1,
+      "error_count": 0,
+      "timeout_count": 0,
+      "drop_rate": 0.0,
+      "avg_query_latency_ms": 56.308,
+      "last_error": null
+    }
+  },
+  "raw_samples": [
+    {
+      "timestamp": 1774277880.379011,
+      "gpu_util": 0.0,
+      "mem_used_mb": 7876.0,
+      "mem_total_mb": 12282.0,
+      "power_w": 25.77,
+      "temp_c": 36.0,
+      "sm_clock_mhz": 2520.0,
+      "mem_clock_mhz": 10251.0
+    }
+  ]
+}

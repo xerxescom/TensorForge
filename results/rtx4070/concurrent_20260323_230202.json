@@ -1,0 +1,63 @@
+{
+  "test_type": "concurrent_stress",
+  "n_tasks": 2,
+  "total_elapsed_s": 90.065,
+  "gpu_stats": {
+    "gpu_util_%": {
+      "mean": 78.68,
+      "max": 96.0,
+      "min": 0.0,
+      "p95": 95.0
+    },
+    "power_w": {
+      "mean": 162.82,
+      "max": 197.01,
+      "min": 9.96,
+      "p95": 196.49
+    },
+    "temp_c": {
+      "mean": 55.63,
+      "max": 62.0,
+      "min": 32.0,
+      "p95": 62.0
+    },
+    "mem_used_mb": {
+      "mean": 7879.43,
+      "max": 7888.0,
+      "min": 7869.0,
+      "p95": 7883.0
+    },
+    "sm_clock_mhz": {
+      "mean": 2484.03,
+      "max": 2790.0,
+      "min": 210.0,
+      "p95": 2790.0
+    },
+    "sample_count": 226
+  },
+  "baselines": {
+    "llm_llama3.1:8b": {
+      "tokens_generated": 4972,
+      "tokens_per_s": 82.87,
+      "tokens_estimated": true
+    },
+    "diffusion_sdxl-turbo": {}
+  },
+  "concurrent_metrics": [
+    {
+      "type": "llm",
+      "model": "llama3.1:8b",
+      "tokens_generated": 4991,
+      "tokens_per_s": 83.18,
+      "tokens_estimated": true
+    },
+    {
+      "type": "diffusion",
+      "model": "sdxl-turbo"
+    }
+  ],
+  "degradation_ratios": {
+    "llm_llama3.1:8b_tokens_per_s_ratio": 1.0037
+  },
+  "timestamp": "2026-03-23T23:02:02"
+}
