@@ -7,6 +7,7 @@ import subprocess
 import sys
 import json
 from pathlib import Path
+from loguru import logger
 from collector import BenchmarkRunner, _subprocess_kwargs
 from model_manager import model_manager
 
@@ -71,17 +72,17 @@ class DiffusionBenchmark(BenchmarkRunner):
     def _ensure_model_available(self):
         """确保模型已下载"""
         if self.local_model_path:
-            print(f"[diffusion] Using local model: {self.local_model_path}")
+            logger.info(f"[diffusion] Using local model: {self.local_model_path}")
             return
         
         try:
-            print(f"[diffusion] Pre-downloading model: {self.model_name}")
+            logger.info(f"[diffusion] Pre-downloading model: {self.model_name}")
             model_path = model_manager.get_model_path(self.model_name)
             self.local_model_path = model_path
-            print(f"[diffusion] Model ready at: {model_path}")
+            logger.info(f"[diffusion] Model ready at: {model_path}")
         except Exception as e:
-            print(f"[diffusion] Model download failed: {e}")
-            print(f"[diffusion] Will try online loading during benchmark")
+            logger.warning(f"[diffusion] Model download failed: {e}")
+            logger.warning("[diffusion] Will try online loading during benchmark")
 
     def run_task(self) -> dict:
         # 用子进程运行，避免在同一 Python 进程中 OOM 时影响采集线程
@@ -103,15 +104,15 @@ class DiffusionBenchmark(BenchmarkRunner):
             worker_metrics = json.loads(lines[-1])
         except subprocess.CalledProcessError as e:
             elapsed = time.perf_counter() - t0
-            print(f"  [warn] Diffusion worker failed: {e.output.decode()[-500:]}")
+            logger.warning(f"  [warn] Diffusion worker failed: {e.output.decode()[-500:]}")
             worker_metrics = {}
         except subprocess.TimeoutExpired:
             elapsed = time.perf_counter() - t0
-            print(f"  [warn] Diffusion worker timed out (15min)")
+            logger.warning("  [warn] Diffusion worker timed out (15min)")
             worker_metrics = {"error": "timeout"}
         except (FileNotFoundError, json.JSONDecodeError):
             elapsed = time.perf_counter() - t0
-            print("  [warn] diffusers not available, using mock")
+            logger.warning("  [warn] diffusers not available, using mock")
             worker_metrics = {}
 
         return {
@@ -290,7 +291,7 @@ class CVBenchmark(BenchmarkRunner):
             worker_metrics = json.loads(lines[-1])
         except Exception as e:
             elapsed = time.perf_counter() - t0
-            print(f"  [warn] CV worker failed: {e}")
+            logger.warning(f"  [warn] CV worker failed: {e}")
             worker_metrics = {}
 
         return {
@@ -380,7 +381,7 @@ class ASRBenchmark(BenchmarkRunner):
 
     def run_task(self) -> dict:
         if not self.audio_files:
-            print("  [warn] No audio files provided, generating synthetic test")
+            logger.warning("  [warn] No audio files provided, generating synthetic test")
             return self._synthetic_benchmark()
 
         script = self._build_script()
@@ -397,7 +398,7 @@ class ASRBenchmark(BenchmarkRunner):
             lines = out.decode().strip().splitlines()
             return json.loads(lines[-1])
         except Exception as e:
-            print(f"  [warn] ASR worker failed: {e}")
+            logger.warning(f"  [warn] ASR worker failed: {e}")
             return {}
 
     def _synthetic_benchmark(self) -> dict:
@@ -438,7 +439,7 @@ print(json.dumps({{
             lines = out.decode().strip().splitlines()
             return json.loads(lines[-1])
         except Exception as e:
-            print(f"  [warn] Synthetic ASR failed: {e}")
+            logger.warning(f"  [warn] Synthetic ASR failed: {e}")
             return {"note": "asr_not_available"}
 
     def _build_script(self) -> str:

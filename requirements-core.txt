@@ -11,6 +11,7 @@ numpy>=1.21.0
 # 网络和配置
 requests>=2.28.0
 PyYAML>=6.0
+loguru>=0.7.0
 
 # 系统工具
 psutil>=5.9.0

@@ -6,6 +6,8 @@ from typing import Optional, Dict, Any
 import time
 import functools
 
+from loguru import logger
+
 
 class ErrorType(Enum):
     """错误类型分类"""
@@ -71,7 +73,7 @@ def retry_on_error(strategy: Optional[RetryStrategy] = None):
             last_exception = None
             last_error_type = ErrorType.UNKNOWN
             last_error_desc = "Unknown error"
-            
+
             for attempt in range(strategy.max_retries + 1):
                 try:
                     return func(*args, **kwargs)
@@ -80,16 +82,18 @@ def retry_on_error(strategy: Optional[RetryStrategy] = None):
                     last_exception = e
                     last_error_type = error_type
                     last_error_desc = error_desc
-                    
+
                     if attempt == strategy.max_retries or not strategy.should_retry(error_type):
                         break
                     
                     delay = strategy.get_delay(attempt)
-                    print(f"[retry] {func.__name__} failed ({error_desc}), retrying in {delay}s...")
+                    logger.warning(
+                        f"{func.__name__} failed ({error_desc}), retrying in {delay}s..."
+                    )
                     time.sleep(delay)
             
             # 所有重试都失败了
-            print(
+            logger.error(
                 f"[error] {func.__name__} failed after {strategy.max_retries} retries "
                 f"({last_error_type.value}): {last_error_desc}"
             )

@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Dict, Any, List
 from dataclasses import dataclass
 
+from loguru import logger
+
 
 @dataclass
 class BenchmarkConfig:
@@ -67,7 +69,7 @@ class ConfigManager:
                     data = yaml.safe_load(f)
                     self._config = self._dict_to_config(data)
             else:
-                print(f"[warn] Config file {self.config_path} not found, using defaults")
+                logger.warning(f"Config file {self.config_path} not found, using defaults")
                 self._config = BenchmarkConfig()
         return self._config
     
@@ -162,7 +164,7 @@ class ConfigManager:
         with open(self.config_path, 'w', encoding='utf-8') as f:
             yaml.dump(default_config, f, default_flow_style=False, allow_unicode=True)
         
-        print(f"Default config saved to {self.config_path}")
+        logger.info(f"Default config saved to {self.config_path}")
 
 
 # 全局配置实例
