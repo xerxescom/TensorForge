@@ -1,0 +1,37 @@
+# GPU Benchmark Configuration
+default_settings:
+  sample_interval_s: 0.5
+  warmup_s: 5.0
+  timeout_s: 120
+  max_raw_samples: 1000
+
+gpu_thresholds:
+  high_utilization: 80.0
+  low_utilization: 20.0
+  max_temperature: 85.0
+  max_power_draw: 450.0
+
+models:
+  llm:
+    default: "llama3.1:8b"
+    precision: "q4_k_m"
+    prompts:
+      - "Explain the difference between a transformer and an RNN in detail."
+      - "Write a Python function to compute Fibonacci numbers recursively with memoization."
+      - "Describe the water cycle in 300 words."
+  
+  diffusion:
+    default: "stabilityai/sdxl-turbo"
+    precision: "fp16"
+    n_images: 10
+    n_steps: 20
+  
+  cv:
+    default: "yolov8n"
+    precision: "fp16"
+    n_frames: 200
+    image_size: 640
+
+concurrent_test:
+  duration_s: 60
+  degradation_threshold: 0.8

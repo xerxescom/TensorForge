@@ -121,13 +121,15 @@ class BenchmarkResult:
 
 class GPUSampler:
     """
-    后台线程，以固定间隔轮询 nvidia-smi，
+    后台线程，以动态间隔轮询 nvidia-smi，
     线程安全地存储样本列表。
     """
 
-    def __init__(self, interval_s: float = 0.5, gpu_index: int = 0):
+    def __init__(self, interval_s: float = 0.5, gpu_index: int = 0, adaptive_sampling: bool = True):
         self.interval_s = interval_s
+        self.base_interval_s = interval_s
         self.gpu_index = gpu_index
+        self.adaptive_sampling = adaptive_sampling
         self._samples: list[GPUSample] = []
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -137,6 +139,7 @@ class GPUSampler:
         self._timeout_count = 0
         self._query_latency_ms: list[float] = []
         self._last_error: Optional[str] = None
+        self._last_gpu_util = 0.0
 
     # ------------------------------------------------------------------ #
     #  nvidia-smi 查询                                                    #
@@ -209,12 +212,62 @@ class GPUSampler:
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
-    def stop(self) -> list[GPUSample]:
+    def smart_sampling(self, samples: list[GPUSample], max_samples: int = 1000) -> list[GPUSample]:
+        """智能采样：保留关键数据点，减少内存使用"""
+        if len(samples) <= max_samples:
+            return samples
+        
+        # 保留首尾样本
+        result = [samples[0], samples[-1]]
+        
+        # 找到峰值和谷值
+        gpu_utils = [s.gpu_util for s in samples]
+        power_vals = [s.power_w for s in samples]
+        temp_vals = [s.temp_c for s in samples]
+        
+        # 找出关键点索引
+        peak_indices = set()
+        for values in [gpu_utils, power_vals, temp_vals]:
+            peak_idx = values.index(max(values))
+            valley_idx = values.index(min(values))
+            peak_indices.add(peak_idx)
+            peak_indices.add(valley_idx)
+        
+        # 均匀采样中间点
+        remaining_slots = max_samples - len(result) - len(peak_indices)
+        if remaining_slots > 0:
+            step = len(samples) // remaining_slots
+            uniform_indices = set(range(0, len(samples), step))
+        else:
+            uniform_indices = set()
+        
+        # 合并所有索引并排序
+        all_indices = (peak_indices | uniform_indices) - {0, len(samples) - 1}
+        for idx in sorted(all_indices):
+            if len(result) < max_samples:
+                result.append(samples[idx])
+        
+        return sorted(result, key=lambda x: x.timestamp)
+
+    def stop(self, max_raw_samples: int = 1000) -> list[GPUSample]:
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=5)
         with self._lock:
-            return list(self._samples)
+            samples = list(self._samples)
+            return self.smart_sampling(samples, max_raw_samples)
+
+    def _adaptive_interval(self, current_util: float) -> float:
+        """根据 GPU 利用率动态调整采样间隔"""
+        if not self.adaptive_sampling:
+            return self.base_interval_s
+        
+        if current_util > 80.0:
+            return self.base_interval_s * 0.4  # 高负载时更频繁采样
+        elif current_util < 20.0:
+            return self.base_interval_s * 2.0  # 低负载时降低频率
+        else:
+            return self.base_interval_s
 
     def _loop(self):
         while not self._stop_event.is_set():
@@ -224,12 +277,17 @@ class GPUSampler:
             if sample:
                 with self._lock:
                     self._samples.append(sample)
+                    self._last_gpu_util = sample.gpu_util
+                # 动态调整下次采样间隔
+                next_interval = self._adaptive_interval(sample.gpu_util)
             else:
                 self._error_count += 1
                 if error == "nvidia-smi query timeout":
                     self._timeout_count += 1
                 self._last_error = error
-            self._stop_event.wait(self.interval_s)
+                next_interval = self.base_interval_s
+            
+            self._stop_event.wait(next_interval)
 
     # ------------------------------------------------------------------ #
     #  统计摘要                                                           #
