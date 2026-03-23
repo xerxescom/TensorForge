@@ -6,7 +6,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from tensorforge.reporting.generate_report import generate
+from src.tensorforge.reporting.generate_report import generate
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

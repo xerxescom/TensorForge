@@ -6,7 +6,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from tensorforge.tools.check_deps import main
+from src.tensorforge.tools.check_deps import main
 
 if __name__ == "__main__":
     sys.exit(main())
