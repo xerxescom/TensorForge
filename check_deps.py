@@ -95,7 +95,7 @@ def check_ollama():
     """检查 Ollama"""
     try:
         result = subprocess.run(
-            ["ollama", "version"],
+            ["ollama", "--version"],
             capture_output=True,
             text=True,
             timeout=10
@@ -170,7 +170,7 @@ def main():
         ("diffusers", None, None),
         ("accelerate", None, None),
         ("ultralytics", None, None),
-        ("faster-whisper", None, None),
+        ("faster_whisper", None, None),
         ("soundfile", None, None),
         ("huggingface_hub", None, None),
     ]
