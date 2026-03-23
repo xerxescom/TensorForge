@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 from datetime import datetime
 from collector import GPUSampler, _subprocess_kwargs
+from config_manager import config_manager
 
 
 # ─────────────────────────────────────────────────────────────
@@ -146,6 +147,7 @@ class ConcurrentStressTest:
         return {
             "tokens_generated": total_tokens,
             "tokens_per_s": round(total_tokens / duration_s, 2),
+            "tokens_estimated": True,
         }
 
     def _timed_diffusion(self, model: str, duration_s: float) -> dict:
@@ -234,6 +236,7 @@ class FullBenchmarkSuite:
         self.gpu_index = gpu_index
         self.skip_phases = skip_phases or []
         self.all_results = []
+        self.config = config_manager.load_config()
 
     def run_all(self):
         print(f"\n{'='*60}")
@@ -246,42 +249,76 @@ class FullBenchmarkSuite:
         from llm_bench import LLMBenchmark, LLMContextScaleBenchmark
         from other_bench import DiffusionBenchmark, CVBenchmark, ASRBenchmark
 
-        common = dict(output_dir=str(self.output_dir), gpu_index=self.gpu_index)
+        common = dict(
+            output_dir=str(self.output_dir),
+            gpu_index=self.gpu_index,
+            sample_interval_s=self.config.sample_interval_s,
+        )
 
         phases = {
             "llm": lambda: LLMBenchmark(
-                model_name="llama3.1:8b", precision="q4_k_m",
-                n_runs=5, warmup_s=5, **common,
+                model_name=self.config.llm_model,
+                precision=self.config.llm_precision,
+                prompts=self.config.llm_prompts,
+                n_runs=min(5, len(self.config.llm_prompts)),
+                use_ollama=self.config.llm_backend == "ollama",
+                warmup_s=self.config.warmup_s,
+                **common,
             ).run(),
 
             "llm_fp16": lambda: LLMBenchmark(
-                model_name="llama3.1:8b", precision="fp16",
-                n_runs=5, warmup_s=5, **common,
+                model_name=self.config.llm_model,
+                precision=self.config.llm_fp16_precision,
+                prompts=self.config.llm_prompts,
+                n_runs=min(5, len(self.config.llm_prompts)),
+                use_ollama=self.config.llm_backend == "ollama",
+                warmup_s=self.config.warmup_s,
+                **common,
             ).run(),
 
             "llm_context_scale": lambda: LLMContextScaleBenchmark(
-                model_name="llama3.1:8b", warmup_s=3, **common,
+                model_name=self.config.llm_model,
+                precision=self.config.llm_precision,
+                warmup_s=min(self.config.warmup_s, 3),
+                **common,
             ).run(),
 
             "diffusion": lambda: DiffusionBenchmark(
-                model_name="stabilityai/sdxl-turbo", precision="fp16",
-                n_images=10, n_steps=20, warmup_s=10, **common,
+                model_name=self.config.diffusion_model,
+                precision=self.config.diffusion_precision,
+                n_images=self.config.diffusion_n_images,
+                n_steps=self.config.diffusion_n_steps,
+                warmup_s=max(self.config.warmup_s, 10),
+                **common,
             ).run(),
 
             "cv": lambda: CVBenchmark(
-                model_name="yolov8n", precision="fp16",
-                n_frames=200, warmup_s=5, **common,
+                model_name=self.config.cv_model,
+                precision=self.config.cv_precision,
+                n_frames=self.config.cv_n_frames,
+                image_size=self.config.cv_image_size,
+                **common,
             ).run(),
 
             "asr": lambda: ASRBenchmark(
-                model_name="base", precision="float16",
-                warmup_s=5, **common,
+                model_name=self.config.asr_model,
+                precision=self.config.asr_precision,
+                warmup_s=self.config.warmup_s,
+                **common,
             ).run(),
 
             "concurrent": lambda: ConcurrentStressTest(
                 tasks=[
-                    {"type": "llm",      "model": "llama3.1:8b",         "duration_s": 60},
-                    {"type": "diffusion","model": "stabilityai/sdxl-turbo","duration_s": 60},
+                    {
+                        "type": "llm",
+                        "model": self.config.llm_model,
+                        "duration_s": self.config.concurrent_duration_s,
+                    },
+                    {
+                        "type": "diffusion",
+                        "model": self.config.diffusion_model,
+                        "duration_s": self.config.concurrent_duration_s,
+                    },
                 ],
                 output_dir=str(self.output_dir),
                 gpu_index=self.gpu_index,
@@ -306,6 +343,7 @@ class FullBenchmarkSuite:
         report = {
             "gpu_name": self.gpu_name,
             "benchmark_date": datetime.now().isoformat(timespec="seconds"),
+            "config_snapshot": self.config.__dict__,
             "phases": self.all_results,
         }
         report_path = self.output_dir / "final_report.json"
