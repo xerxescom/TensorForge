@@ -73,7 +73,7 @@ def retry_on_error(strategy: Optional[RetryStrategy] = None):
             last_exception = None
             last_error_type = ErrorType.UNKNOWN
             last_error_desc = "Unknown error"
-            
+
             for attempt in range(strategy.max_retries + 1):
                 try:
                     return func(*args, **kwargs)
@@ -82,7 +82,7 @@ def retry_on_error(strategy: Optional[RetryStrategy] = None):
                     last_exception = e
                     last_error_type = error_type
                     last_error_desc = error_desc
-                    
+
                     if attempt == strategy.max_retries or not strategy.should_retry(error_type):
                         break
                     
