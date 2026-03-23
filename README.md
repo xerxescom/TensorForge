@@ -28,11 +28,11 @@ TensorForge/
 │           ├── check_deps.py
 │           ├── install.py
 │           └── test_models.py
-├── check_deps.py                # 兼容旧用法的根目录入口
-├── generate_report.py           # 兼容旧用法的根目录入口
-├── install.py                   # 兼容旧用法的根目录入口
-├── run_suite.py                 # 兼容旧用法的根目录入口
-├── test_models.py               # 兼容旧用法的根目录入口
+├── check_deps.py                # 根目录 CLI 入口
+├── generate_report.py           # 根目录 CLI 入口
+├── install.py                   # 根目录 CLI 入口
+├── run_suite.py                 # 根目录 CLI 入口
+├── test_models.py               # 根目录 CLI 入口
 ├── config.yaml
 ├── requirements.txt
 ├── requirements-core.txt
@@ -148,11 +148,15 @@ from tensorforge.reporting.generate_report import generate
 
 ### 兼容性说明
 
-仓库根目录保留了轻量入口脚本：
+仓库根目录现在只保留真正需要的 CLI 入口脚本：
 
-- 为了兼容历史命令，如 `python run_suite.py`
-- 为了让旧文档和已有自动化脚本不需要立刻修改
-- 新代码组织与旧调用方式可以同时工作
+- `python run_suite.py`
+- `python check_deps.py`
+- `python install.py`
+- `python test_models.py`
+- `python generate_report.py`
+
+其余历史模块文件已经移除，避免根目录和 `src/` 下出现双份实现。
 
 ## 📦 依赖文件说明
 
@@ -184,12 +188,11 @@ from tensorforge.reporting.generate_report import generate
 
 ## 📌 迁移提示
 
-如果你之前直接修改根目录的 `collector.py`、`llm_bench.py` 等文件，现在建议改为对应的包内文件：
+如果你之前习惯在根目录找实现代码，现在请直接进入 `src/tensorforge/`：
 
-- `collector.py` → `src/tensorforge/core/collector.py`
-- `llm_bench.py` → `src/tensorforge/benchmarks/llm.py`
-- `other_bench.py` → `src/tensorforge/benchmarks/multimodal.py`
-- `run_suite.py` → `src/tensorforge/benchmarks/suite.py`
-- `generate_report.py` → `src/tensorforge/reporting/generate_report.py`
+- 采样与基础设施：`src/tensorforge/core/`
+- benchmark 实现：`src/tensorforge/benchmarks/`
+- 报表：`src/tensorforge/reporting/`
+- 工具脚本实现：`src/tensorforge/tools/`
 
-这样后续继续扩展时会更容易维护。
+这样后续继续扩展时会更容易维护，也不会再遇到“根目录和包目录各有一份代码”的困惑。
