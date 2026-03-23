@@ -18,6 +18,7 @@ sphinx-rtd-theme>=1.0.0
 # 调试
 ipython>=8.0.0
 jupyter>=1.0.0
+loguru>=0.7.0
 
 # 性能分析
 memory-profiler>=0.60.0

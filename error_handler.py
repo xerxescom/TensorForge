@@ -6,6 +6,9 @@ from typing import Optional, Dict, Any
 import time
 import functools
 
+from config_manager import config_manager
+from tf_logger import logger
+
 
 class ErrorType(Enum):
     """错误类型分类"""
@@ -63,13 +66,19 @@ class ErrorClassifier:
 def retry_on_error(strategy: Optional[RetryStrategy] = None):
     """重试装饰器"""
     if strategy is None:
-        strategy = RetryStrategy()
+        config = config_manager.load_config()
+        strategy = RetryStrategy(
+            max_retries=config.error_max_retries if config.error_enable_retries else 0,
+            base_delay=1.0,
+            backoff_factor=config.error_retry_backoff_factor,
+        )
     
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             last_exception = None
             last_error_type = ErrorType.UNKNOWN
+            last_error_desc = "Unknown error"
             
             for attempt in range(strategy.max_retries + 1):
                 try:
@@ -78,16 +87,29 @@ def retry_on_error(strategy: Optional[RetryStrategy] = None):
                     error_type, error_desc = ErrorClassifier.classify(e)
                     last_exception = e
                     last_error_type = error_type
+                    last_error_desc = error_desc
+                    config = config_manager.load_config()
+                    if config.error_report_errors:
+                        error_reporter.report_error(
+                            error_type,
+                            error_desc,
+                            context={"function": func.__name__, "attempt": attempt + 1},
+                        )
                     
                     if attempt == strategy.max_retries or not strategy.should_retry(error_type):
                         break
                     
                     delay = strategy.get_delay(attempt)
-                    print(f"[retry] {func.__name__} failed ({error_desc}), retrying in {delay}s...")
+                    logger.warning(
+                        f"{func.__name__} failed ({error_desc}), retrying in {delay}s..."
+                    )
                     time.sleep(delay)
             
             # 所有重试都失败了
-            print(f"[error] {func.__name__} failed after {strategy.max_retries} retries: {last_error_desc}")
+            logger.error(
+                f"[error] {func.__name__} failed after {strategy.max_retries} retries "
+                f"({last_error_type.value}): {last_error_desc}"
+            )
             raise last_exception
         
         return wrapper

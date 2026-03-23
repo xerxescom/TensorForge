@@ -12,6 +12,10 @@ from dataclasses import dataclass
 import threading
 from urllib.parse import urlparse
 
+from config_manager import config_manager
+from network_optimizer import DownloadOptimizer, NetworkConfig
+from tf_logger import logger
+
 
 @dataclass
 class ModelConfig:
@@ -29,14 +33,29 @@ class ModelDownloader:
     """模型下载器"""
     
     def __init__(self, cache_dir: str = "models_cache"):
+        config = config_manager.load_config()
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(exist_ok=True)
         self.download_locks: Dict[str, threading.Lock] = {}
-        self.mirrors = [
-            "https://huggingface.co",
-            "https://hf-mirror.com",  # 中国镜像
+        self.mirrors = list(config.network_preferred_endpoints) + [
             "https://cdn-lfs.huggingface.co"
         ]
+        self.network_config = NetworkConfig(
+            timeout=config.network_timeout,
+            max_retries=config.network_max_retries,
+            retry_delay=config.network_retry_delay,
+            use_proxy=config.network_use_proxy,
+            proxy_host=config.network_proxy_host,
+            proxy_port=config.network_proxy_port,
+            verify_ssl=config.network_verify_ssl,
+            cache_dir=str(self.cache_dir),
+            enable_hf_transfer=config.network_enable_hf_transfer,
+            preferred_endpoints=list(config.network_preferred_endpoints),
+        )
+        self.download_optimizer = DownloadOptimizer(self.network_config)
+        self.max_cache_size_bytes = int(config.cache_max_size_gb * (1024 ** 3))
+        self.cleanup_old_models = config.cache_cleanup_old_models
+        self.model_retention_days = config.cache_model_retention_days
     
     def get_lock(self, model_id: str) -> threading.Lock:
         """获取模型下载锁"""
@@ -48,12 +67,46 @@ class ModelDownloader:
         """检查模型是否已缓存"""
         cache_path = self.cache_dir / model_id.replace("/", "_")
         return cache_path.exists() and any(cache_path.iterdir())
+
+    def _dir_size_bytes(self, path: Path) -> int:
+        return sum(p.stat().st_size for p in path.rglob("*") if p.is_file())
+
+    def _cleanup_expired_cache(self):
+        if not self.cleanup_old_models:
+            return
+
+        now = time.time()
+        retention_seconds = self.model_retention_days * 24 * 60 * 60
+        for model_dir in self.cache_dir.iterdir():
+            if not model_dir.is_dir():
+                continue
+            age_seconds = now - model_dir.stat().st_mtime
+            if age_seconds > retention_seconds:
+                shutil.rmtree(model_dir, ignore_errors=True)
+                logger.info(f"[cache] Removed expired cache directory: {model_dir.name}")
+
+    def _enforce_cache_size_limit(self):
+        if self.max_cache_size_bytes <= 0:
+            return
+
+        model_dirs = [p for p in self.cache_dir.iterdir() if p.is_dir()]
+        total_size = sum(self._dir_size_bytes(p) for p in model_dirs)
+        if total_size <= self.max_cache_size_bytes:
+            return
+
+        for model_dir in sorted(model_dirs, key=lambda p: p.stat().st_mtime):
+            if total_size <= self.max_cache_size_bytes:
+                break
+            dir_size = self._dir_size_bytes(model_dir)
+            shutil.rmtree(model_dir, ignore_errors=True)
+            total_size -= dir_size
+            logger.info(f"[cache] Evicted {model_dir.name} to enforce cache size limit")
     
     def download_with_retry(self, url: str, local_path: Path, timeout: int = 300, max_retries: int = 3) -> bool:
         """带重试的文件下载"""
         for attempt in range(max_retries):
             try:
-                print(f"[download] Attempt {attempt + 1}/{max_retries}: {url}")
+                logger.info(f"[download] Attempt {attempt + 1}/{max_retries}: {url}")
                 
                 # 使用流式下载，支持大文件
                 response = requests.get(
@@ -80,19 +133,21 @@ class ModelDownloader:
                             # 显示进度
                             if total_size > 0:
                                 progress = (downloaded / total_size) * 100
-                                print(f"\r[download] Progress: {progress:.1f}%", end='', flush=True)
+                                logger.debug(
+                                    f"[download] Progress for {local_path.name}: {progress:.1f}%"
+                                )
                 
-                print(f"\n[download] Success: {local_path}")
+                logger.info(f"[download] Success: {local_path}")
                 return True
                 
             except requests.exceptions.Timeout:
-                print(f"\n[download] Timeout on attempt {attempt + 1}")
+                logger.warning(f"[download] Timeout on attempt {attempt + 1}")
                 if attempt == max_retries - 1:
                     raise
                 time.sleep(2 ** attempt)  # 指数退避
                 
             except requests.exceptions.RequestException as e:
-                print(f"\n[download] Error: {e}")
+                logger.warning(f"[download] Error: {e}")
                 if attempt == max_retries - 1:
                     raise
                 time.sleep(2 ** attempt)
@@ -111,7 +166,7 @@ class ModelDownloader:
         if self.mirrors:
             for mirror in self.mirrors[1:]:
                 mirror_url = f"{mirror}/{model_id}/resolve/main/{filename}"
-                print(f"[download] Trying mirror: {mirror}")
+                logger.info(f"[download] Trying mirror: {mirror}")
                 if self.download_with_retry(mirror_url, local_path):
                     return True
         
@@ -121,10 +176,12 @@ class ModelDownloader:
         """下载完整模型"""
         model_id = model_config.huggingface_id
         cache_path = self.cache_dir / model_id.replace("/", "_")
+        self._cleanup_expired_cache()
+        self._enforce_cache_size_limit()
         
         # 检查是否已缓存
         if self.is_model_cached(model_id):
-            print(f"[cache] Model already cached: {model_id}")
+            logger.info(f"[cache] Model already cached: {model_id}")
             return str(cache_path)
         
         # 使用锁防止并发下载
@@ -134,7 +191,8 @@ class ModelDownloader:
             if self.is_model_cached(model_id):
                 return str(cache_path)
             
-            print(f"[download] Starting download: {model_id}")
+            logger.info(f"[download] Starting download: {model_id}")
+            self.download_optimizer.setup()
             
             # 获取模型文件列表
             try:
@@ -146,23 +204,26 @@ class ModelDownloader:
                     repo_id=model_id,
                     cache_dir=str(self.cache_dir),
                     resume_download=True,
-                    timeout=model_config.timeout,
-                    max_retries=model_config.retry_count
+                    timeout=model_config.timeout or self.network_config.timeout,
+                    max_retries=model_config.retry_count or self.network_config.max_retries
                 )
                 
-                print(f"[download] Model downloaded to: {downloaded_path}")
+                logger.info(f"[download] Model downloaded to: {downloaded_path}")
+                self._enforce_cache_size_limit()
                 return downloaded_path
                 
             except ImportError:
                 # 如果没有 huggingface_hub，使用手动下载
                 return self._manual_download(model_config, cache_path)
             except Exception as e:
-                print(f"[download] Failed with huggingface_hub: {e}")
+                logger.warning(f"[download] Failed with huggingface_hub: {e}")
                 return self._manual_download(model_config, cache_path)
+            finally:
+                self.download_optimizer.cleanup()
     
     def _manual_download(self, model_config: ModelConfig, cache_path: Path) -> str:
         """手动下载模型（备用方案）"""
-        print(f"[download] Using manual download method")
+        logger.warning("[download] Using manual download method")
         
         # 创建模型目录
         cache_path.mkdir(parents=True, exist_ok=True)
@@ -180,7 +241,7 @@ class ModelDownloader:
             local_file = cache_path / filename
             if not local_file.exists():
                 if not self.try_mirrors(model_config.huggingface_id, filename, local_file):
-                    print(f"[download] Failed to download: {filename}")
+                    logger.warning(f"[download] Failed to download: {filename}")
         
         return str(cache_path)
 
@@ -189,7 +250,11 @@ class ModelManager:
     """模型管理器"""
     
     def __init__(self, cache_dir: str = "models_cache"):
-        self.downloader = ModelDownloader(cache_dir)
+        config = config_manager.load_config()
+        resolved_cache_dir = cache_dir or config.cache_base_dir
+        if cache_dir == "models_cache":
+            resolved_cache_dir = config.cache_base_dir
+        self.downloader = ModelDownloader(resolved_cache_dir)
         self.predefined_models = {
             "sdxl-turbo": ModelConfig(
                 name="SDXL-Turbo",
@@ -235,12 +300,12 @@ class ModelManager:
             cache_path = self.downloader.cache_dir / model_name.replace("/", "_")
             if cache_path.exists():
                 shutil.rmtree(cache_path)
-                print(f"[cache] Cleared cache for: {model_name}")
+                logger.info(f"[cache] Cleared cache for: {model_name}")
         else:
             if self.downloader.cache_dir.exists():
                 shutil.rmtree(self.downloader.cache_dir)
                 self.downloader.cache_dir.mkdir(exist_ok=True)
-                print(f"[cache] Cleared all cache")
+                logger.info("[cache] Cleared all cache")
 
 
 # 全局模型管理器

@@ -8,6 +8,8 @@ import sys
 import time
 from pathlib import Path
 
+from tf_logger import logger
+
 from collector import BenchmarkRunner, _subprocess_kwargs
 
 IS_WINDOWS = sys.platform == "win32"
@@ -79,27 +81,29 @@ class LLMBenchmark(BenchmarkRunner):
                     **_subprocess_kwargs(),
                 )
                 if result.returncode == 0:
-                    print(f"[llm] Ollama available, checking for model: {self.model_name}")
+                    logger.info(f"[llm] Ollama available, checking for model: {self.model_name}")
                     if self.model_name in result.stdout:
-                        print(f"[llm] Model {self.model_name} found in ollama")
+                        logger.info(f"[llm] Model {self.model_name} found in ollama")
                     else:
-                        print(f"[llm] Model {self.model_name} not found, will attempt to pull")
+                        logger.warning(
+                            f"[llm] Model {self.model_name} not found, will attempt to pull"
+                        )
                 else:
-                    print("[llm] Ollama not available, consider using alternative backend")
+                    logger.warning("[llm] Ollama not available, consider using alternative backend")
             except Exception as e:
-                print(f"[llm] Ollama check failed: {e}")
+                logger.warning(f"[llm] Ollama check failed: {e}")
         else:
             # 检查本地模型文件
             if self.local_model_path and Path(self.local_model_path).exists():
-                print(f"[llm] Using local model: {self.local_model_path}")
+                logger.info(f"[llm] Using local model: {self.local_model_path}")
             else:
-                print(f"[llm] Local model not found, will try to download")
+                logger.warning("[llm] Local model not found, will try to download")
 
     def run_task(self) -> dict:
         run_results = []
 
         for i, prompt in enumerate(self.prompts[:self.n_runs]):
-            print(f"  LLM run {i + 1}/{self.n_runs} ...")
+            logger.info(f"  LLM run {i + 1}/{self.n_runs} ...")
             r = self._single_run(prompt)
             run_results.append(r)
 
@@ -152,6 +156,7 @@ class LLMBenchmark(BenchmarkRunner):
         total_elapsed_s = 0.0
         output_text = ""
         error = None
+        tokens_estimated = False
 
         try:
             proc = subprocess.Popen(
@@ -208,18 +213,19 @@ class LLMBenchmark(BenchmarkRunner):
                 est_tokens = int(len(output_text.split()) * 1.3)
                 tokens_per_s = round(est_tokens / decode_elapsed, 2) if decode_elapsed > 0 else 0
                 tokens_generated = tokens_generated or est_tokens
+                tokens_estimated = True
 
         except FileNotFoundError:
             error = "ollama_not_found"
-            print("  [warn] ollama not found. Install from https://ollama.com")
+            logger.warning("  [warn] ollama not found. Install from https://ollama.com")
         except subprocess.TimeoutExpired:
             error = "ollama_timeout"
             total_elapsed_s = round(time.perf_counter() - t_start, 4)
-            print("  [warn] ollama run timed out (120s)")
+            logger.warning("  [warn] ollama run timed out (120s)")
         except Exception as e:
             error = str(e)
             total_elapsed_s = round(time.perf_counter() - t_start, 4)
-            print(f"  [warn] ollama error: {e}")
+            logger.warning(f"  [warn] ollama error: {e}")
 
         return {
             "prompt_preview": prompt[:60] + "...",
@@ -227,6 +233,7 @@ class LLMBenchmark(BenchmarkRunner):
             "total_elapsed_s": total_elapsed_s,
             "tokens_per_s": tokens_per_s,
             "tokens_generated": tokens_generated,
+            "tokens_estimated": tokens_estimated,
             "error": error,
         }
 
@@ -266,7 +273,7 @@ class LLMContextScaleBenchmark(BenchmarkRunner):
                 f"{prompt}"
             )
 
-            print(f"  Context scale test: {ctx_len} tokens ...")
+            logger.info(f"  Context scale test: {ctx_len} tokens ...")
             r = self._single_probe(full_prompt)
 
             scale_results.append({
