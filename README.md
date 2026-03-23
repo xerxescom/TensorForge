@@ -5,7 +5,6 @@
 
 **支持系统：Windows 10/11 · Linux（Ubuntu 20.04+）**
 
-> macOS 自 2019 年起不再支持 NVIDIA GPU，不在支持范围内。
 
 ## 目录结构
 
