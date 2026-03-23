@@ -8,6 +8,7 @@ import sys
 import json
 from pathlib import Path
 from collector import BenchmarkRunner, _subprocess_kwargs
+from model_manager import model_manager
 
 IS_WINDOWS = sys.platform == "win32"
 
@@ -45,11 +46,12 @@ class DiffusionBenchmark(BenchmarkRunner):
 
     def __init__(
         self,
-        model_name: str = "stabilityai/sdxl-turbo",
+        model_name: str = "sdxl-turbo",
         precision: str = "fp16",
         n_images: int = 10,
         n_steps: int = 20,
         seed: int = 42,
+        local_model_path: str = None,
         **kwargs,
     ):
         super().__init__(
@@ -61,6 +63,25 @@ class DiffusionBenchmark(BenchmarkRunner):
         self.n_images = n_images
         self.n_steps = n_steps
         self.seed = seed
+        self.local_model_path = local_model_path
+        
+        # 预下载模型
+        self._ensure_model_available()
+
+    def _ensure_model_available(self):
+        """确保模型已下载"""
+        if self.local_model_path:
+            print(f"[diffusion] Using local model: {self.local_model_path}")
+            return
+        
+        try:
+            print(f"[diffusion] Pre-downloading model: {self.model_name}")
+            model_path = model_manager.get_model_path(self.model_name)
+            self.local_model_path = model_path
+            print(f"[diffusion] Model ready at: {model_path}")
+        except Exception as e:
+            print(f"[diffusion] Model download failed: {e}")
+            print(f"[diffusion] Will try online loading during benchmark")
 
     def run_task(self) -> dict:
         # 用子进程运行，避免在同一 Python 进程中 OOM 时影响采集线程
@@ -73,7 +94,7 @@ class DiffusionBenchmark(BenchmarkRunner):
             out = subprocess.check_output(
                 [sys.executable, str(script_path)],  # sys.executable = 当前 Python 路径，Windows/Linux 通用
                 stderr=subprocess.STDOUT,
-                timeout=600,
+                timeout=900,  # 增加到15分钟
                 **_subprocess_kwargs(),
             )
             elapsed = time.perf_counter() - t0
@@ -84,6 +105,10 @@ class DiffusionBenchmark(BenchmarkRunner):
             elapsed = time.perf_counter() - t0
             print(f"  [warn] Diffusion worker failed: {e.output.decode()[-500:]}")
             worker_metrics = {}
+        except subprocess.TimeoutExpired:
+            elapsed = time.perf_counter() - t0
+            print(f"  [warn] Diffusion worker timed out (15min)")
+            worker_metrics = {"error": "timeout"}
         except (FileNotFoundError, json.JSONDecodeError):
             elapsed = time.perf_counter() - t0
             print("  [warn] diffusers not available, using mock")
@@ -106,15 +131,65 @@ class DiffusionBenchmark(BenchmarkRunner):
         dtype_map = {"fp16": "torch.float16", "fp32": "torch.float32", "bf16": "torch.bfloat16"}
         dtype = dtype_map.get(self.precision, "torch.float16")
         prompts_repr = repr(self.BENCH_PROMPTS)
+        
+        # 使用本地模型路径或在线模型名
+        model_source = f'"{self.local_model_path}"' if self.local_model_path else f'"{self.model_name}"'
+        
         return f"""
-import torch, time, json
-from diffusers import AutoPipelineForText2Image
+import torch, time, json, sys, os
+from pathlib import Path
 
-pipe = AutoPipelineForText2Image.from_pretrained(
-    "{self.model_name}",
-    torch_dtype={dtype},
-    variant="fp16",
-).to("cuda")
+# 设置环境变量优化下载
+os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
+os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'  # 启用快速传输
+os.environ['TRANSFORMERS_CACHE'] = '{model_manager.downloader.cache_dir}'
+os.environ['HF_HOME'] = '{model_manager.downloader.cache_dir}'
+
+# 网络配置
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+try:
+    from diffusers import AutoPipelineForText2Image
+    from huggingface_hub import hf_hub_download, snapshot_download
+    
+    print("[worker] Loading diffusion model...")
+    
+    # 尝试加载本地模型
+    try:
+        pipe = AutoPipelineForText2Image.from_pretrained(
+            {model_source},
+            torch_dtype={dtype},
+            variant="fp16",
+            local_files_only=True if {repr(self.local_model_path)} else False,
+            resume_download=True,
+            timeout=600,
+        )
+        print("[worker] Model loaded successfully")
+    except Exception as e:
+        print(f"[worker] Local model load failed: {{e}}")
+        print("[worker] Trying online download...")
+        
+        pipe = AutoPipelineForText2Image.from_pretrained(
+            {model_source},
+            torch_dtype={dtype},
+            variant="fp16",
+            resume_download=True,
+            timeout=600,
+        )
+    
+    pipe = pipe.to("cuda")
+    print("[worker] Model moved to GPU")
+
+except ImportError as e:
+    print(f"[worker] Import error: {{e}}")
+    # 如果没有 diffusers，输出错误信息
+    print(json.dumps({{"error": "diffusers_not_available", "details": str(e)}}))
+    sys.exit(1)
+except Exception as e:
+    print(f"[worker] Model loading error: {{e}}")
+    print(json.dumps({{"error": "model_load_failed", "details": str(e)}}))
+    sys.exit(1)
 
 prompts = {prompts_repr}
 n = {self.n_images}
@@ -123,17 +198,36 @@ steps = {self.n_steps}
 generator = torch.Generator("cuda").manual_seed(seed)
 
 times = []
+success_count = 0
+
 for i in range(n):
     prompt = prompts[i % len(prompts)]
     t0 = time.perf_counter()
-    pipe(prompt=prompt, num_inference_steps=steps, generator=generator).images[0]
-    times.append(time.perf_counter() - t0)
+    
+    try:
+        image = pipe(prompt=prompt, num_inference_steps=steps, generator=generator).images[0]
+        elapsed = time.perf_counter() - t0
+        times.append(elapsed)
+        success_count += 1
+        print(f"[worker] Image {{i+1}}/{{n}} generated in {{elapsed:.3f}}s")
+    except Exception as e:
+        print(f"[worker] Image generation failed: {{e}}")
+        # 仍然记录时间，但标记为失败
+        times.append(time.perf_counter() - t0)
 
-print(json.dumps({{
-    "per_image_s_mean": round(sum(times)/len(times), 3),
-    "per_image_s_min":  round(min(times), 3),
-    "per_image_s_max":  round(max(times), 3),
-}}))
+if times:
+    result = {{
+        "per_image_s_mean": round(sum(times)/len(times), 3),
+        "per_image_s_min":  round(min(times), 3),
+        "per_image_s_max":  round(max(times), 3),
+        "success_count": success_count,
+        "total_attempts": n,
+        "success_rate": round(success_count / n, 4),
+    }}
+else:
+    result = {{"error": "no_successful_generations"}}
+
+print(json.dumps(result))
 """
 
 

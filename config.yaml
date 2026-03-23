@@ -4,6 +4,7 @@ default_settings:
   warmup_s: 5.0
   timeout_s: 120
   max_raw_samples: 1000
+  adaptive_sampling: True
 
 gpu_thresholds:
   high_utilization: 80.0
@@ -11,27 +12,68 @@ gpu_thresholds:
   max_temperature: 85.0
   max_power_draw: 450.0
 
+# 网络和下载配置
+network:
+  timeout: 300
+  max_retries: 5
+  retry_delay: 2.0
+  use_proxy: false
+  proxy_host: null
+  proxy_port: null
+  verify_ssl: true
+  enable_hf_transfer: true
+  preferred_endpoints:
+    - "https://huggingface.co"
+    - "https://hf-mirror.com"
+
+# 模型缓存配置
+cache:
+  base_dir: "models_cache"
+  max_size_gb: 50
+  cleanup_old_models: true
+  model_retention_days: 30
+
 models:
   llm:
     default: "llama3.1:8b"
     precision: "q4_k_m"
+    backend: "ollama"  # ollama, transformers, llama-cpp
     prompts:
       - "Explain the difference between a transformer and an RNN in detail."
       - "Write a Python function to compute Fibonacci numbers recursively with memoization."
       - "Describe the water cycle in 300 words."
+      - "What are the main causes and consequences of the French Revolution?"
+      - "Explain how gradient descent works in machine learning."
   
   diffusion:
-    default: "stabilityai/sdxl-turbo"
+    default: "sdxl-turbo"
+    huggingface_id: "stabilityai/sdxl-turbo"
     precision: "fp16"
     n_images: 10
     n_steps: 20
+    local_files_only: false
+    download_timeout: 600  # 10分钟
   
   cv:
     default: "yolov8n"
+    huggingface_id: "ultralytics/yolov8n"
     precision: "fp16"
     n_frames: 200
     image_size: 640
+  
+  asr:
+    default: "whisper-base"
+    huggingface_id: "openai/whisper-base"
+    precision: "float16"
 
 concurrent_test:
   duration_s: 60
   degradation_threshold: 0.8
+
+# 错误处理配置
+error_handling:
+  enable_retries: true
+  max_retries: 3
+  retry_backoff_factor: 2.0
+  classify_errors: true
+  report_errors: true

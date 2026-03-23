@@ -3,9 +3,11 @@ LLM 推理速度测试
 依赖: ollama (本地运行) 或 llama-cpp-python
 支持平台：Windows 10/11 · Linux
 """
-import time
 import subprocess
 import sys
+import time
+from pathlib import Path
+
 from collector import BenchmarkRunner, _subprocess_kwargs
 
 IS_WINDOWS = sys.platform == "win32"
@@ -38,13 +40,15 @@ class LLMBenchmark(BenchmarkRunner):
     ]
 
     def __init__(
-        self,
-        model_name: str = "llama3.1:8b",
-        precision: str = "q4_k_m",
-        prompts: list[str] | None = None,
-        n_runs: int = 5,
-        context_lengths: list[int] | None = None,
-        **kwargs,
+            self,
+            model_name: str = "llama3.1:8b",
+            precision: str = "q4_k_m",
+            prompts: list[str] | None = None,
+            n_runs: int = 5,
+            context_lengths: list[int] | None = None,
+            use_ollama: bool = True,
+            local_model_path: str = None,
+            **kwargs,
     ):
         super().__init__(
             task_name="llm_inference",
@@ -56,20 +60,54 @@ class LLMBenchmark(BenchmarkRunner):
         self.n_runs = n_runs
         # 可选：测试不同上下文长度下的性能衰减
         self.context_lengths = context_lengths or []
+        self.use_ollama = use_ollama
+        self.local_model_path = local_model_path
+
+        # 预检查模型可用性
+        self._check_model_availability()
+
+    def _check_model_availability(self):
+        """检查模型可用性"""
+        if self.use_ollama:
+            # 检查 ollama 是否可用
+            try:
+                result = subprocess.run(
+                    ["ollama", "list"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    **_subprocess_kwargs(),
+                )
+                if result.returncode == 0:
+                    print(f"[llm] Ollama available, checking for model: {self.model_name}")
+                    if self.model_name in result.stdout:
+                        print(f"[llm] Model {self.model_name} found in ollama")
+                    else:
+                        print(f"[llm] Model {self.model_name} not found, will attempt to pull")
+                else:
+                    print("[llm] Ollama not available, consider using alternative backend")
+            except Exception as e:
+                print(f"[llm] Ollama check failed: {e}")
+        else:
+            # 检查本地模型文件
+            if self.local_model_path and Path(self.local_model_path).exists():
+                print(f"[llm] Using local model: {self.local_model_path}")
+            else:
+                print(f"[llm] Local model not found, will try to download")
 
     def run_task(self) -> dict:
         run_results = []
 
         for i, prompt in enumerate(self.prompts[:self.n_runs]):
-            print(f"  LLM run {i+1}/{self.n_runs} ...")
+            print(f"  LLM run {i + 1}/{self.n_runs} ...")
             r = self._single_run(prompt)
             run_results.append(r)
 
         # 聚合
-        ttfts       = [r["ttft_s"]       for r in run_results if r["ttft_s"] > 0]
-        tps_list    = [r["tokens_per_s"]  for r in run_results if r["tokens_per_s"] > 0]
+        ttfts = [r["ttft_s"] for r in run_results if r["ttft_s"] > 0]
+        tps_list = [r["tokens_per_s"] for r in run_results if r["tokens_per_s"] > 0]
         elapsed_list = [r["total_elapsed_s"] for r in run_results if r["total_elapsed_s"] > 0]
-        total_toks  = sum(r["tokens_generated"] for r in run_results)
+        total_toks = sum(r["tokens_generated"] for r in run_results)
         success_count = sum(1 for r in run_results if not r.get("error"))
 
         def _percentile(values: list[float], q: float) -> float:
@@ -80,21 +118,21 @@ class LLMBenchmark(BenchmarkRunner):
             return round(s[idx], 4 if q < 1 else 2)
 
         return {
-            "success_count":       success_count,
-            "failure_count":       len(run_results) - success_count,
-            "success_rate":        round(success_count / len(run_results), 4) if run_results else 0,
-            "tokens_per_s_mean":  round(sum(tps_list) / len(tps_list), 2) if tps_list else 0,
-            "tokens_per_s_max":   round(max(tps_list), 2) if tps_list else 0,
-            "tokens_per_s_min":   round(min(tps_list), 2) if tps_list else 0,
-            "tokens_per_s_p50":   _percentile(tps_list, 0.50),
-            "tokens_per_s_p95":   _percentile(tps_list, 0.95),
-            "ttft_s_mean":        round(sum(ttfts) / len(ttfts), 4) if ttfts else 0,
-            "ttft_s_min":         round(min(ttfts), 4) if ttfts else 0,
-            "ttft_s_p95":         _percentile(ttfts, 0.95),
+            "success_count": success_count,
+            "failure_count": len(run_results) - success_count,
+            "success_rate": round(success_count / len(run_results), 4) if run_results else 0,
+            "tokens_per_s_mean": round(sum(tps_list) / len(tps_list), 2) if tps_list else 0,
+            "tokens_per_s_max": round(max(tps_list), 2) if tps_list else 0,
+            "tokens_per_s_min": round(min(tps_list), 2) if tps_list else 0,
+            "tokens_per_s_p50": _percentile(tps_list, 0.50),
+            "tokens_per_s_p95": _percentile(tps_list, 0.95),
+            "ttft_s_mean": round(sum(ttfts) / len(ttfts), 4) if ttfts else 0,
+            "ttft_s_min": round(min(ttfts), 4) if ttfts else 0,
+            "ttft_s_p95": _percentile(ttfts, 0.95),
             "response_elapsed_s_mean": round(sum(elapsed_list) / len(elapsed_list), 4) if elapsed_list else 0,
-            "tokens_generated":   total_toks,
-            "n_runs":             len(run_results),
-            "per_run_detail":     run_results,
+            "tokens_generated": total_toks,
+            "n_runs": len(run_results),
+            "per_run_detail": run_results,
         }
 
     def _single_run(self, prompt: str) -> dict:
@@ -200,11 +238,11 @@ class LLMContextScaleBenchmark(BenchmarkRunner):
     """
 
     def __init__(
-        self,
-        model_name: str = "llama3.1:8b",
-        precision: str = "q4_k_m",
-        context_lengths: list[int] | None = None,
-        **kwargs,
+            self,
+            model_name: str = "llama3.1:8b",
+            precision: str = "q4_k_m",
+            context_lengths: list[int] | None = None,
+            **kwargs,
     ):
         super().__init__(
             task_name="llm_context_scale",
