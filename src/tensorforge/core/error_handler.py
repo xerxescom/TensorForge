@@ -6,8 +6,8 @@ from typing import Optional, Dict, Any
 import time
 import functools
 
-from config_manager import config_manager
-from tf_logger import logger
+from .config_manager import config_manager
+from .tf_logger import logger
 
 
 class ErrorType(Enum):

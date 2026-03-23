@@ -8,9 +8,9 @@ import sys
 import time
 from pathlib import Path
 
-from tf_logger import logger
+from ..core.tf_logger import logger
 
-from collector import BenchmarkRunner, _subprocess_kwargs
+from ..core.collector import BenchmarkRunner, _subprocess_kwargs
 
 IS_WINDOWS = sys.platform == "win32"
 

@@ -7,9 +7,9 @@ import subprocess
 import sys
 import json
 from pathlib import Path
-from tf_logger import logger
-from collector import BenchmarkRunner, _subprocess_kwargs
-from model_manager import model_manager
+from ..core.tf_logger import logger
+from ..core.collector import BenchmarkRunner, _subprocess_kwargs
+from ..core.model_manager import model_manager
 
 IS_WINDOWS = sys.platform == "win32"
 
