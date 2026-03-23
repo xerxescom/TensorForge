@@ -12,9 +12,9 @@ from dataclasses import dataclass
 import threading
 from urllib.parse import urlparse
 
-from config_manager import config_manager
-from network_optimizer import DownloadOptimizer, NetworkConfig
-from tf_logger import logger
+from .config_manager import config_manager
+from .network_optimizer import DownloadOptimizer, NetworkConfig
+from .tf_logger import logger
 
 
 @dataclass

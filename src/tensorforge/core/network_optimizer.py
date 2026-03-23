@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
-from tf_logger import logger
+from .tf_logger import logger
 
 
 @dataclass
