@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 
 <<<<<<<< HEAD:src/tensorforge/benchmarks/llm.py
+<<<<<<<< HEAD:src/tensorforge/benchmarks/llm.py
 from ..core.tf_logger import logger
 
 from ..core.collector import BenchmarkRunner, _subprocess_kwargs
@@ -315,6 +316,14 @@ class LLMContextScaleBenchmark(BenchmarkRunner):
             keep_raw_samples=False,
         )
         return bench._single_run(prompt)
+========
+ROOT = Path(__file__).resolve().parent
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from tensorforge.benchmarks.llm import *
+>>>>>>>> 48d5659 (Refactor project into package structure):llm_bench.py
 ========
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
