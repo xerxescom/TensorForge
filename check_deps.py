@@ -154,6 +154,7 @@ def main():
         ("numpy", None, None),
         ("requests", None, None),
         ("PyYAML", "yaml", None),
+        ("loguru", None, None),
     ]
     
     missing_core = []

@@ -12,6 +12,8 @@ from dataclasses import dataclass
 import threading
 from urllib.parse import urlparse
 
+from loguru import logger
+
 
 @dataclass
 class ModelConfig:
@@ -53,7 +55,7 @@ class ModelDownloader:
         """带重试的文件下载"""
         for attempt in range(max_retries):
             try:
-                print(f"[download] Attempt {attempt + 1}/{max_retries}: {url}")
+                logger.info(f"[download] Attempt {attempt + 1}/{max_retries}: {url}")
                 
                 # 使用流式下载，支持大文件
                 response = requests.get(
@@ -80,19 +82,21 @@ class ModelDownloader:
                             # 显示进度
                             if total_size > 0:
                                 progress = (downloaded / total_size) * 100
-                                print(f"\r[download] Progress: {progress:.1f}%", end='', flush=True)
+                                logger.debug(
+                                    f"[download] Progress for {local_path.name}: {progress:.1f}%"
+                                )
                 
-                print(f"\n[download] Success: {local_path}")
+                logger.info(f"[download] Success: {local_path}")
                 return True
                 
             except requests.exceptions.Timeout:
-                print(f"\n[download] Timeout on attempt {attempt + 1}")
+                logger.warning(f"[download] Timeout on attempt {attempt + 1}")
                 if attempt == max_retries - 1:
                     raise
                 time.sleep(2 ** attempt)  # 指数退避
                 
             except requests.exceptions.RequestException as e:
-                print(f"\n[download] Error: {e}")
+                logger.warning(f"[download] Error: {e}")
                 if attempt == max_retries - 1:
                     raise
                 time.sleep(2 ** attempt)
@@ -111,7 +115,7 @@ class ModelDownloader:
         if self.mirrors:
             for mirror in self.mirrors[1:]:
                 mirror_url = f"{mirror}/{model_id}/resolve/main/{filename}"
-                print(f"[download] Trying mirror: {mirror}")
+                logger.info(f"[download] Trying mirror: {mirror}")
                 if self.download_with_retry(mirror_url, local_path):
                     return True
         
@@ -124,7 +128,7 @@ class ModelDownloader:
         
         # 检查是否已缓存
         if self.is_model_cached(model_id):
-            print(f"[cache] Model already cached: {model_id}")
+            logger.info(f"[cache] Model already cached: {model_id}")
             return str(cache_path)
         
         # 使用锁防止并发下载
@@ -134,7 +138,7 @@ class ModelDownloader:
             if self.is_model_cached(model_id):
                 return str(cache_path)
             
-            print(f"[download] Starting download: {model_id}")
+            logger.info(f"[download] Starting download: {model_id}")
             
             # 获取模型文件列表
             try:
@@ -150,19 +154,19 @@ class ModelDownloader:
                     max_retries=model_config.retry_count
                 )
                 
-                print(f"[download] Model downloaded to: {downloaded_path}")
+                logger.info(f"[download] Model downloaded to: {downloaded_path}")
                 return downloaded_path
                 
             except ImportError:
                 # 如果没有 huggingface_hub，使用手动下载
                 return self._manual_download(model_config, cache_path)
             except Exception as e:
-                print(f"[download] Failed with huggingface_hub: {e}")
+                logger.warning(f"[download] Failed with huggingface_hub: {e}")
                 return self._manual_download(model_config, cache_path)
     
     def _manual_download(self, model_config: ModelConfig, cache_path: Path) -> str:
         """手动下载模型（备用方案）"""
-        print(f"[download] Using manual download method")
+        logger.warning("[download] Using manual download method")
         
         # 创建模型目录
         cache_path.mkdir(parents=True, exist_ok=True)
@@ -180,7 +184,7 @@ class ModelDownloader:
             local_file = cache_path / filename
             if not local_file.exists():
                 if not self.try_mirrors(model_config.huggingface_id, filename, local_file):
-                    print(f"[download] Failed to download: {filename}")
+                    logger.warning(f"[download] Failed to download: {filename}")
         
         return str(cache_path)
 
@@ -235,12 +239,12 @@ class ModelManager:
             cache_path = self.downloader.cache_dir / model_name.replace("/", "_")
             if cache_path.exists():
                 shutil.rmtree(cache_path)
-                print(f"[cache] Cleared cache for: {model_name}")
+                logger.info(f"[cache] Cleared cache for: {model_name}")
         else:
             if self.downloader.cache_dir.exists():
                 shutil.rmtree(self.downloader.cache_dir)
                 self.downloader.cache_dir.mkdir(exist_ok=True)
-                print(f"[cache] Cleared all cache")
+                logger.info("[cache] Cleared all cache")
 
 
 # 全局模型管理器
