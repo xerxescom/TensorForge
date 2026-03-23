@@ -27,14 +27,17 @@ gpu_benchmark/
 ```bash
 # 核心（必须）——选择适合你 CUDA 版本的命令
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
 # LLM：ollama（Windows / Linux 均支持）
 # Windows: 下载 https://ollama.com/download/windows 安装包
-# Linux:   curl -fsSL https://ollama.com/install.sh | sh
+# Linux: curl -fsSL https://ollama.com/install.sh | sh
 ollama pull llama3.1:8b
 
 # 图像生成（可选）
 pip install diffusers accelerate transformers
+# 相关的网络库和 Diffusers 升级到最新版
+pip install -U huggingface_hub httpx diffusers
 
 # CV（可选）
 pip install ultralytics
@@ -51,6 +54,7 @@ python run_suite.py --gpu-name "RTX 4070" --output-dir results\rtx4070
 
 # Linux
 python run_suite.py --gpu-name "RTX 4090" --output-dir results/rtx4090
+python run_suite.py --gpu-name "RTX 5060Ti" --output-dir results/rtx5060Ti
 
 # 只测 LLM
 python run_suite.py --only llm llm_fp16 llm_context_scale

@@ -1,0 +1,164 @@
+{
+  "task_name": "cv_detection",
+  "model_name": "yolov8n",
+  "precision": "fp16",
+  "start_time": "2026-03-23T15:18:11",
+  "end_time": "2026-03-23T15:18:20",
+  "duration_s": 8.823,
+  "status": "success",
+  "error": null,
+  "environment": {
+    "platform": "Linux-5.15.0-153-generic-x86_64-with-glibc2.35",
+    "python_version": "3.11.12",
+    "gpu_index": 0,
+    "sample_interval_s": 0.5,
+    "nvidia_smi": "nvidia-smi",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 5060 Ti",
+      "driver_version": "580.76.05",
+      "memory_total_mb": "16311",
+      "power_limit_w": "180.00"
+    }
+  },
+  "config": {
+    "task_name": "cv_detection",
+    "model_name": "yolov8n",
+    "precision": "fp16",
+    "output_dir": "results/rtx5060Ti",
+    "gpu_index": 0,
+    "sample_interval_s": 0.5,
+    "warmup_s": 5,
+    "keep_raw_samples": true
+  },
+  "metrics": {
+    "n_frames": 200,
+    "image_size": 640,
+    "batch_size": 1,
+    "total_elapsed_s": 8.822,
+    "energy_j": 46.76
+  },
+  "gpu_stats": {
+    "gpu_util_%": {
+      "mean": 0.0,
+      "max": 0.0,
+      "min": 0.0,
+      "p95": 0.0
+    },
+    "power_w": {
+      "mean": 5.3,
+      "max": 9.73,
+      "min": 4.49,
+      "p95": 9.73
+    },
+    "temp_c": {
+      "mean": 26.12,
+      "max": 27.0,
+      "min": 26.0,
+      "p95": 27.0
+    },
+    "mem_used_mb": {
+      "mean": 5385.38,
+      "max": 5535.0,
+      "min": 5364.0,
+      "p95": 5535.0
+    },
+    "sm_clock_mhz": {
+      "mean": 480.0,
+      "max": 2580.0,
+      "min": 180.0,
+      "p95": 2580.0
+    },
+    "sample_count": 8,
+    "sampler_health": {
+      "query_count": 8,
+      "success_count": 8,
+      "error_count": 0,
+      "timeout_count": 0,
+      "drop_rate": 0.0,
+      "avg_query_latency_ms": 187.737,
+      "last_error": null
+    }
+  },
+  "raw_samples": [
+    {
+      "timestamp": 1774250291.7247784,
+      "gpu_util": 0.0,
+      "mem_used_mb": 5364.0,
+      "mem_total_mb": 16311.0,
+      "power_w": 4.63,
+      "temp_c": 26.0,
+      "sm_clock_mhz": 180.0,
+      "mem_clock_mhz": 405.0
+    },
+    {
+      "timestamp": 1774250293.0372112,
+      "gpu_util": 0.0,
+      "mem_used_mb": 5364.0,
+      "mem_total_mb": 16311.0,
+      "power_w": 4.49,
+      "temp_c": 26.0,
+      "sm_clock_mhz": 180.0,
+      "mem_clock_mhz": 405.0
+    },
+    {
+      "timestamp": 1774250294.2356303,
+      "gpu_util": 0.0,
+      "mem_used_mb": 5364.0,
+      "mem_total_mb": 16311.0,
+      "power_w": 4.58,
+      "temp_c": 26.0,
+      "sm_clock_mhz": 180.0,
+      "mem_clock_mhz": 405.0
+    },
+    {
+      "timestamp": 1774250295.4480574,
+      "gpu_util": 0.0,
+      "mem_used_mb": 5364.0,
+      "mem_total_mb": 16311.0,
+      "power_w": 4.92,
+      "temp_c": 26.0,
+      "sm_clock_mhz": 180.0,
+      "mem_clock_mhz": 405.0
+    },
+    {
+      "timestamp": 1774250296.7173936,
+      "gpu_util": 0.0,
+      "mem_used_mb": 5364.0,
+      "mem_total_mb": 16311.0,
+      "power_w": 4.67,
+      "temp_c": 26.0,
+      "sm_clock_mhz": 180.0,
+      "mem_clock_mhz": 405.0
+    },
+    {
+      "timestamp": 1774250297.9367456,
+      "gpu_util": 0.0,
+      "mem_used_mb": 5364.0,
+      "mem_total_mb": 16311.0,
+      "power_w": 4.7,
+      "temp_c": 26.0,
+      "sm_clock_mhz": 180.0,
+      "mem_clock_mhz": 405.0
+    },
+    {
+      "timestamp": 1774250299.1360466,
+      "gpu_util": 0.0,
+      "mem_used_mb": 5364.0,
+      "mem_total_mb": 16311.0,
+      "power_w": 4.71,
+      "temp_c": 26.0,
+      "sm_clock_mhz": 180.0,
+      "mem_clock_mhz": 405.0
+    },
+    {
+      "timestamp": 1774250300.2285047,
+      "gpu_util": 0.0,
+      "mem_used_mb": 5535.0,
+      "mem_total_mb": 16311.0,
+      "power_w": 9.73,
+      "temp_c": 27.0,
+      "sm_clock_mhz": 2580.0,
+      "mem_clock_mhz": 13801.0
+    }
+  ]
+}
