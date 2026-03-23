@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Dict, Any, List
 from dataclasses import dataclass
 
+from loguru import logger
+
 
 @dataclass
 class BenchmarkConfig:
@@ -24,9 +26,22 @@ class BenchmarkConfig:
     
     # 模型配置
     llm_prompts: List[str] = None
+    llm_model: str = "llama3.1:8b"
+    llm_precision: str = "q4_k_m"
+    llm_backend: str = "ollama"
+    llm_fp16_precision: str = "fp16"
     diffusion_n_images: int = 10
     diffusion_n_steps: int = 20
+    diffusion_model: str = "sdxl-turbo"
+    diffusion_precision: str = "fp16"
+    diffusion_local_files_only: bool = False
     cv_n_frames: int = 200
+    cv_model: str = "yolov8n"
+    cv_precision: str = "fp16"
+    cv_image_size: int = 640
+    asr_model: str = "base"
+    asr_precision: str = "float16"
+    concurrent_duration_s: int = 60
     
     def __post_init__(self):
         if self.llm_prompts is None:
@@ -54,7 +69,7 @@ class ConfigManager:
                     data = yaml.safe_load(f)
                     self._config = self._dict_to_config(data)
             else:
-                print(f"[warn] Config file {self.config_path} not found, using defaults")
+                logger.warning(f"Config file {self.config_path} not found, using defaults")
                 self._config = BenchmarkConfig()
         return self._config
     
@@ -63,9 +78,14 @@ class ConfigManager:
         default_settings = data.get('default_settings', {})
         gpu_thresholds = data.get('gpu_thresholds', {})
         models = data.get('models', {})
+        llm_model_cfg = models.get('llm', {})
+        diffusion_model_cfg = models.get('diffusion', {})
+        cv_model_cfg = models.get('cv', {})
+        asr_model_cfg = models.get('asr', {})
+        concurrent_test = data.get('concurrent_test', {})
         
         # LLM prompts
-        llm_prompts = []
+        llm_prompts = None
         if models and 'llm' in models and 'prompts' in models['llm']:
             llm_prompts = models['llm']['prompts']
         
@@ -82,9 +102,22 @@ class ConfigManager:
             max_power_draw=gpu_thresholds.get('max_power_draw', 450.0),
             
             llm_prompts=llm_prompts,
-            diffusion_n_images=models.get('diffusion', {}).get('n_images', 10),
-            diffusion_n_steps=models.get('diffusion', {}).get('n_steps', 20),
-            cv_n_frames=models.get('cv', {}).get('n_frames', 200),
+            llm_model=llm_model_cfg.get('default', 'llama3.1:8b'),
+            llm_precision=llm_model_cfg.get('precision', 'q4_k_m'),
+            llm_backend=llm_model_cfg.get('backend', 'ollama'),
+            llm_fp16_precision=llm_model_cfg.get('fp16_precision', 'fp16'),
+            diffusion_n_images=diffusion_model_cfg.get('n_images', 10),
+            diffusion_n_steps=diffusion_model_cfg.get('n_steps', 20),
+            diffusion_model=diffusion_model_cfg.get('default', 'sdxl-turbo'),
+            diffusion_precision=diffusion_model_cfg.get('precision', 'fp16'),
+            diffusion_local_files_only=diffusion_model_cfg.get('local_files_only', False),
+            cv_n_frames=cv_model_cfg.get('n_frames', 200),
+            cv_model=cv_model_cfg.get('default', 'yolov8n'),
+            cv_precision=cv_model_cfg.get('precision', 'fp16'),
+            cv_image_size=cv_model_cfg.get('image_size', 640),
+            asr_model=asr_model_cfg.get('default', 'base'),
+            asr_precision=asr_model_cfg.get('precision', 'float16'),
+            concurrent_duration_s=concurrent_test.get('duration_s', 60),
         )
     
     def save_default_config(self):
@@ -131,7 +164,7 @@ class ConfigManager:
         with open(self.config_path, 'w', encoding='utf-8') as f:
             yaml.dump(default_config, f, default_flow_style=False, allow_unicode=True)
         
-        print(f"Default config saved to {self.config_path}")
+        logger.info(f"Default config saved to {self.config_path}")
 
 
 # 全局配置实例
