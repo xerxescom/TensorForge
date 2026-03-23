@@ -15,6 +15,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from tf_logger import logger
+
 # ── 平台工具 ────────────────────────────────────────────────────────────────
 
 IS_WINDOWS = sys.platform == "win32"
@@ -81,7 +83,7 @@ try:
     NVIDIA_SMI = _find_nvidia_smi()
 except FileNotFoundError as _e:
     NVIDIA_SMI = None
-    print(f"[warn] {_e}")
+    logger.warning(_e)
 
 
 @dataclass
@@ -399,10 +401,10 @@ class BenchmarkRunner:
     #  主流程 (自动化)                                                   #
     # ------------------------------------------------------------------ #
     def run(self) -> BenchmarkResult:
-        print(f"[{self.task_name}] Warm-up {self.warmup_s}s ...")
+        logger.info(f"[{self.task_name}] Warm-up {self.warmup_s}s ...")
         time.sleep(self.warmup_s)
 
-        print(f"[{self.task_name}] Starting GPU sampler ...")
+        logger.info(f"[{self.task_name}] Starting GPU sampler ...")
         self._sampler.start()
         start_ts = time.time()
         start_str = datetime.now().isoformat(timespec="seconds")
@@ -410,13 +412,13 @@ class BenchmarkRunner:
         status = "success"
         error = None
 
-        print(f"[{self.task_name}] Running task ...")
+        logger.info(f"[{self.task_name}] Running task ...")
         try:
             metrics = self.run_task()
         except Exception as e:
             status = "failed"
             error = str(e)
-            print(f"[{self.task_name}] [error] {error}")
+            logger.exception(f"[{self.task_name}] [error] {error}")
 
         end_ts = time.time()
         end_str = datetime.now().isoformat(timespec="seconds")
@@ -540,17 +542,17 @@ class BenchmarkRunner:
                 writer.writeheader()
             writer.writerow(row)
 
-        print(f"[{self.task_name}] Saved → {json_path.name}  +  summary.csv")
+        logger.info(f"[{self.task_name}] Saved → {json_path.name}  +  summary.csv")
 
     def _print_summary(self, r: BenchmarkResult):
-        print(f"\n{'='*52}")
-        print(f"  {r.task_name} | {r.model_name} | {r.precision}")
-        print(f"  Duration : {r.duration_s}s")
-        print(f"  Metrics  : {json.dumps(r.metrics, indent=4)}")
+        logger.info("=" * 52)
+        logger.info(f"  {r.task_name} | {r.model_name} | {r.precision}")
+        logger.info(f"  Duration : {r.duration_s}s")
+        logger.info(f"  Metrics  : {json.dumps(r.metrics, indent=4)}")
         pw = r.gpu_stats.get("power_w", {})
         tc = r.gpu_stats.get("temp_c", {})
         mu = r.gpu_stats.get("mem_used_mb", {})
-        print(f"  Power    : mean={pw.get('mean')}W  max={pw.get('max')}W")
-        print(f"  Temp     : mean={tc.get('mean')}°C  max={tc.get('max')}°C")
-        print(f"  VRAM     : max={mu.get('max')}MB")
-        print(f"{'='*52}\n")
+        logger.info(f"  Power    : mean={pw.get('mean')}W  max={pw.get('max')}W")
+        logger.info(f"  Temp     : mean={tc.get('mean')}°C  max={tc.get('max')}°C")
+        logger.info(f"  VRAM     : max={mu.get('max')}MB")
+        logger.info("=" * 52)

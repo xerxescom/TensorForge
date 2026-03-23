@@ -9,7 +9,13 @@ import threading
 import subprocess
 from pathlib import Path
 from datetime import datetime
+from dataclasses import asdict
+
+from tf_logger import logger
+
 from collector import GPUSampler, _subprocess_kwargs
+from config_manager import config_manager
+from logging_utils import configure_logging
 
 
 # ─────────────────────────────────────────────────────────────
@@ -40,7 +46,7 @@ class ConcurrentStressTest:
         self.gpu_index = gpu_index
 
     def run(self) -> dict:
-        print(f"\n[Concurrent] Starting {len(self.tasks)} tasks simultaneously ...")
+        logger.info(f"[Concurrent] Starting {len(self.tasks)} tasks simultaneously ...")
         sampler = GPUSampler(interval_s=0.5, gpu_index=self.gpu_index)
 
         # 先跑基准（单任务）
@@ -96,8 +102,8 @@ class ConcurrentStressTest:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         out_path = self.output_dir / f"concurrent_{ts}.json"
         out_path.write_text(json.dumps(result, indent=2))
-        print(f"[Concurrent] Saved → {out_path.name}")
-        print(f"[Concurrent] Degradation: {json.dumps(degradation, indent=2)}")
+        logger.info(f"[Concurrent] Saved → {out_path.name}")
+        logger.info(f"[Concurrent] Degradation: {json.dumps(degradation, indent=2)}")
         return result
 
     @staticmethod
@@ -146,6 +152,7 @@ class ConcurrentStressTest:
         return {
             "tokens_generated": total_tokens,
             "tokens_per_s": round(total_tokens / duration_s, 2),
+            "tokens_estimated": True,
         }
 
     def _timed_diffusion(self, model: str, duration_s: float) -> dict:
@@ -188,7 +195,7 @@ print(json.dumps({{
 
     def _run_baselines(self) -> dict:
         """依次单独跑，获取基准性能"""
-        print("[Concurrent] Collecting single-task baselines ...")
+        logger.info("[Concurrent] Collecting single-task baselines ...")
         baselines = {}
         for cfg in self.tasks:
             key = f"{cfg['type']}_{cfg.get('model', '')}"
@@ -234,54 +241,90 @@ class FullBenchmarkSuite:
         self.gpu_index = gpu_index
         self.skip_phases = skip_phases or []
         self.all_results = []
+        configure_logging(self.output_dir)
+        self.config = config_manager.load_config()
 
     def run_all(self):
-        print(f"\n{'='*60}")
-        print(f"  GPU Benchmark Suite")
-        print(f"  Target : {self.gpu_name}")
-        print(f"  Output : {self.output_dir}")
-        print(f"  Start  : {datetime.now().isoformat(timespec='seconds')}")
-        print(f"{'='*60}\n")
+        logger.info("=" * 60)
+        logger.info("  GPU Benchmark Suite")
+        logger.info(f"  Target : {self.gpu_name}")
+        logger.info(f"  Output : {self.output_dir}")
+        logger.info(f"  Start  : {datetime.now().isoformat(timespec='seconds')}")
+        logger.info("=" * 60)
 
         from llm_bench import LLMBenchmark, LLMContextScaleBenchmark
         from other_bench import DiffusionBenchmark, CVBenchmark, ASRBenchmark
 
-        common = dict(output_dir=str(self.output_dir), gpu_index=self.gpu_index)
+        common = dict(
+            output_dir=str(self.output_dir),
+            gpu_index=self.gpu_index,
+            sample_interval_s=self.config.sample_interval_s,
+        )
 
         phases = {
             "llm": lambda: LLMBenchmark(
-                model_name="llama3.1:8b", precision="q4_k_m",
-                n_runs=5, warmup_s=5, **common,
+                model_name=self.config.llm_model,
+                precision=self.config.llm_precision,
+                prompts=self.config.llm_prompts,
+                n_runs=min(5, len(self.config.llm_prompts)),
+                use_ollama=self.config.llm_backend == "ollama",
+                warmup_s=self.config.warmup_s,
+                **common,
             ).run(),
 
             "llm_fp16": lambda: LLMBenchmark(
-                model_name="llama3.1:8b", precision="fp16",
-                n_runs=5, warmup_s=5, **common,
+                model_name=self.config.llm_model,
+                precision=self.config.llm_fp16_precision,
+                prompts=self.config.llm_prompts,
+                n_runs=min(5, len(self.config.llm_prompts)),
+                use_ollama=self.config.llm_backend == "ollama",
+                warmup_s=self.config.warmup_s,
+                **common,
             ).run(),
 
             "llm_context_scale": lambda: LLMContextScaleBenchmark(
-                model_name="llama3.1:8b", warmup_s=3, **common,
+                model_name=self.config.llm_model,
+                precision=self.config.llm_precision,
+                warmup_s=min(self.config.warmup_s, 3),
+                **common,
             ).run(),
 
             "diffusion": lambda: DiffusionBenchmark(
-                model_name="stabilityai/sdxl-turbo", precision="fp16",
-                n_images=10, n_steps=20, warmup_s=10, **common,
+                model_name=self.config.diffusion_model,
+                precision=self.config.diffusion_precision,
+                n_images=self.config.diffusion_n_images,
+                n_steps=self.config.diffusion_n_steps,
+                warmup_s=max(self.config.warmup_s, 10),
+                **common,
             ).run(),
 
             "cv": lambda: CVBenchmark(
-                model_name="yolov8n", precision="fp16",
-                n_frames=200, warmup_s=5, **common,
+                model_name=self.config.cv_model,
+                precision=self.config.cv_precision,
+                n_frames=self.config.cv_n_frames,
+                image_size=self.config.cv_image_size,
+                **common,
             ).run(),
 
             "asr": lambda: ASRBenchmark(
-                model_name="base", precision="float16",
-                warmup_s=5, **common,
+                model_name=self.config.asr_model,
+                precision=self.config.asr_precision,
+                warmup_s=self.config.warmup_s,
+                **common,
             ).run(),
 
             "concurrent": lambda: ConcurrentStressTest(
                 tasks=[
-                    {"type": "llm",      "model": "llama3.1:8b",         "duration_s": 60},
-                    {"type": "diffusion","model": "stabilityai/sdxl-turbo","duration_s": 60},
+                    {
+                        "type": "llm",
+                        "model": self.config.llm_model,
+                        "duration_s": self.config.concurrent_duration_s,
+                    },
+                    {
+                        "type": "diffusion",
+                        "model": self.config.diffusion_model,
+                        "duration_s": self.config.concurrent_duration_s,
+                    },
                 ],
                 output_dir=str(self.output_dir),
                 gpu_index=self.gpu_index,
@@ -290,14 +333,14 @@ class FullBenchmarkSuite:
 
         for phase_name, phase_fn in phases.items():
             if phase_name in self.skip_phases:
-                print(f"[Suite] Skipping phase: {phase_name}")
+                logger.info(f"[Suite] Skipping phase: {phase_name}")
                 continue
-            print(f"\n[Suite] ── Phase: {phase_name} ──")
+            logger.info(f"[Suite] ── Phase: {phase_name} ──")
             try:
                 result = phase_fn()
                 self.all_results.append({"phase": phase_name, "result": result})
             except Exception as e:
-                print(f"[Suite] ERROR in {phase_name}: {e}")
+                logger.exception(f"[Suite] ERROR in {phase_name}: {e}")
                 self.all_results.append({"phase": phase_name, "error": str(e)})
 
         self._write_final_report()
@@ -306,6 +349,7 @@ class FullBenchmarkSuite:
         report = {
             "gpu_name": self.gpu_name,
             "benchmark_date": datetime.now().isoformat(timespec="seconds"),
+            "config_snapshot": asdict(self.config),
             "phases": self.all_results,
         }
         report_path = self.output_dir / "final_report.json"
@@ -319,8 +363,8 @@ class FullBenchmarkSuite:
         # 写入文件，务必带上 utf-8 编码！
         report_path.write_text(json_data, encoding="utf-8")
         # report_path.write_text(json.dumps(report, indent=2))
-        print(f"\n[Suite] Final report → {report_path}")
-        print(f"[Suite] All done. Results in: {self.output_dir}")
+        logger.info(f"[Suite] Final report → {report_path}")
+        logger.info(f"[Suite] All done. Results in: {self.output_dir}")
 
 
 # ─────────────────────────────────────────────────────────────
