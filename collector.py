@@ -128,6 +128,7 @@ class GPUSampler:
     """
 
     def __init__(self, interval_s: float = 0.5, gpu_index: int = 0, adaptive_sampling: bool = True):
+        logger.debug(f"[collector] Initializing GPUSampler: interval={interval_s}s, gpu={gpu_index}, adaptive={adaptive_sampling}")
         self.interval_s = interval_s
         self.base_interval_s = interval_s
         self.gpu_index = gpu_index
@@ -148,6 +149,7 @@ class GPUSampler:
     # ------------------------------------------------------------------ #
     def _query(self) -> tuple[Optional[GPUSample], Optional[str], float]:
         if NVIDIA_SMI is None:
+            logger.error("[collector] nvidia-smi not available for GPU monitoring")
             return None, "nvidia-smi unavailable", 0.0
 
         fields = (
@@ -167,6 +169,7 @@ class GPUSampler:
         ]
         t0 = time.perf_counter()
         try:
+            logger.debug(f"[collector] Querying GPU {self.gpu_index} with nvidia-smi")
             out = subprocess.check_output(
                 cmd,
                 stderr=subprocess.DEVNULL,
@@ -179,10 +182,11 @@ class GPUSampler:
                 try:
                     return float(v)
                 except (ValueError, TypeError):
+                    logger.debug(f"[collector] Failed to parse value '{v}' as float, using default {default}")
                     return default
 
             latency_ms = (time.perf_counter() - t0) * 1000
-            return GPUSample(
+            sample = GPUSample(
                 timestamp=time.time(),
                 gpu_util=safe(vals[0]),
                 mem_used_mb=safe(vals[1]),
@@ -191,18 +195,23 @@ class GPUSampler:
                 temp_c=safe(vals[4]),
                 sm_clock_mhz=safe(vals[5]),
                 mem_clock_mhz=safe(vals[6]),
-            ), None, latency_ms
+            )
+            logger.debug(f"[collector] GPU sample: util={sample.gpu_util}%, mem={sample.mem_used_mb}/{sample.mem_total_mb}MB, power={sample.power_w}W, temp={sample.temp_c}°C")
+            return sample, None, latency_ms
         except subprocess.TimeoutExpired:
             latency_ms = (time.perf_counter() - t0) * 1000
+            logger.warning(f"[collector] nvidia-smi query timeout after {latency_ms:.1f}ms")
             return None, "nvidia-smi query timeout", latency_ms
         except Exception as e:
             latency_ms = (time.perf_counter() - t0) * 1000
+            logger.error(f"[collector] nvidia-smi query failed: {e}")
             return None, str(e), latency_ms
 
     # ------------------------------------------------------------------ #
     #  生命周期                                                           #
     # ------------------------------------------------------------------ #
     def start(self):
+        logger.info(f"[collector] Starting GPU sampler for GPU {self.gpu_index}")
         self._stop_event.clear()
         with self._lock:
             self._samples.clear()
@@ -213,12 +222,15 @@ class GPUSampler:
         self._last_error = None
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
+        logger.debug(f"[collector] GPU sampler thread started")
 
     def smart_sampling(self, samples: list[GPUSample], max_samples: int = 1000) -> list[GPUSample]:
         """智能采样：保留关键数据点，减少内存使用"""
         if len(samples) <= max_samples:
+            logger.debug(f"[collector] Smart sampling: keeping all {len(samples)} samples (under limit {max_samples})")
             return samples
         
+        logger.debug(f"[collector] Smart sampling: reducing {len(samples)} samples to {max_samples}")
         # 保留首尾样本
         result = [samples[0], samples[-1]]
         
@@ -234,6 +246,8 @@ class GPUSampler:
             valley_idx = values.index(min(values))
             peak_indices.add(peak_idx)
             peak_indices.add(valley_idx)
+        
+        logger.debug(f"[collector] Smart sampling: found {len(peak_indices)} peak/valley points")
         
         # 均匀采样中间点
         remaining_slots = max_samples - len(result) - len(peak_indices)

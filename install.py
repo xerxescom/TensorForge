@@ -40,7 +40,8 @@ def check_cuda():
                 ["nvidia-smi"], 
                 capture_output=True, 
                 text=True, 
-                timeout=10
+                timeout=10,
+                encoding="utf-8",
             )
             if result.returncode == 0:
                 # 解析 CUDA 版本
@@ -119,7 +120,8 @@ def check_ollama():
             ["ollama", "version"], 
             capture_output=True, 
             text=True, 
-            timeout=10
+            timeout=10,
+            encoding="utf-8",
         )
         if result.returncode == 0:
             print(f"✅ Ollama available: {result.stdout.strip()}")
@@ -140,7 +142,8 @@ def check_nvidia_smi():
             ["nvidia-smi", "--version"], 
             capture_output=True, 
             text=True, 
-            timeout=10
+            timeout=10,
+            encoding="utf-8",
         )
         if result.returncode == 0:
             print("✅ nvidia-smi available")

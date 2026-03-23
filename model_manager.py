@@ -104,11 +104,13 @@ class ModelDownloader:
     
     def download_with_retry(self, url: str, local_path: Path, timeout: int = 300, max_retries: int = 3) -> bool:
         """带重试的文件下载"""
+        logger.debug(f"[download] Starting download: {url} -> {local_path}")
         for attempt in range(max_retries):
             try:
                 logger.info(f"[download] Attempt {attempt + 1}/{max_retries}: {url}")
                 
                 # 使用流式下载，支持大文件
+                logger.debug(f"[download] Sending HTTP request with timeout={timeout}s")
                 response = requests.get(
                     url, 
                     stream=True, 
@@ -116,13 +118,16 @@ class ModelDownloader:
                     headers={'User-Agent': 'TensorForge-Benchmark/1.0'}
                 )
                 response.raise_for_status()
+                logger.debug(f"[download] HTTP response: {response.status_code}, content-length: {response.headers.get('content-length', 'unknown')}")
                 
                 # 创建目录
                 local_path.parent.mkdir(parents=True, exist_ok=True)
+                logger.debug(f"[download] Created directory: {local_path.parent}")
                 
                 # 下载文件
                 total_size = int(response.headers.get('content-length', 0))
                 downloaded = 0
+                start_time = time.time()
                 
                 with open(local_path, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=8192):
@@ -133,43 +138,56 @@ class ModelDownloader:
                             # 显示进度
                             if total_size > 0:
                                 progress = (downloaded / total_size) * 100
+                                speed_mb_s = (downloaded / (1024*1024)) / (time.time() - start_time + 0.001)
                                 logger.debug(
-                                    f"[download] Progress for {local_path.name}: {progress:.1f}%"
+                                    f"[download] Progress for {local_path.name}: {progress:.1f}% ({speed_mb_s:.1f} MB/s)"
                                 )
                 
-                logger.info(f"[download] Success: {local_path}")
+                elapsed = time.time() - start_time
+                final_size_mb = downloaded / (1024*1024)
+                logger.info(f"[download] Success: {local_path} ({final_size_mb:.1f}MB in {elapsed:.1f}s)")
                 return True
                 
             except requests.exceptions.Timeout:
-                logger.warning(f"[download] Timeout on attempt {attempt + 1}")
+                logger.warning(f"[download] Timeout on attempt {attempt + 1} after {timeout}s")
                 if attempt == max_retries - 1:
                     raise
-                time.sleep(2 ** attempt)  # 指数退避
+                backoff = 2 ** attempt
+                logger.debug(f"[download] Backing off for {backoff}s before retry")
+                time.sleep(backoff)  # 指数退避
                 
             except requests.exceptions.RequestException as e:
-                logger.warning(f"[download] Error: {e}")
+                logger.warning(f"[download] Error on attempt {attempt + 1}: {e}")
                 if attempt == max_retries - 1:
                     raise
-                time.sleep(2 ** attempt)
+                backoff = 2 ** attempt
+                logger.debug(f"[download] Backing off for {backoff}s before retry")
+                time.sleep(backoff)
         
         return False
     
     def try_mirrors(self, model_id: str, filename: str, local_path: Path) -> bool:
         """尝试从不同镜像下载"""
         base_url = f"https://huggingface.co/{model_id}/resolve/main/{filename}"
+        logger.info(f"[download] Trying to download {filename} from mirrors")
         
         # 尝试主站
+        logger.debug(f"[download] Trying primary endpoint: huggingface.co")
         if self.download_with_retry(base_url, local_path):
+            logger.info(f"[download] Successfully downloaded from primary endpoint")
             return True
         
         # 尝试镜像站
         if self.mirrors:
-            for mirror in self.mirrors[1:]:
+            logger.info(f"[download] Primary failed, trying {len(self.mirrors)-1} mirror endpoints")
+            for i, mirror in enumerate(self.mirrors[1:], 1):
                 mirror_url = f"{mirror}/{model_id}/resolve/main/{filename}"
-                logger.info(f"[download] Trying mirror: {mirror}")
+                logger.info(f"[download] Trying mirror {i}/{len(self.mirrors)-1}: {mirror}")
                 if self.download_with_retry(mirror_url, local_path):
+                    logger.info(f"[download] Successfully downloaded from mirror: {mirror}")
                     return True
         
+        logger.error(f"[download] All mirrors failed for {filename}")
         return False
     
     def download_model(self, model_config: ModelConfig) -> str:

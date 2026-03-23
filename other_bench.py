@@ -85,13 +85,17 @@ class DiffusionBenchmark(BenchmarkRunner):
             logger.warning("[diffusion] Will try online loading during benchmark")
 
     def run_task(self) -> dict:
+        logger.info(f"[diffusion] Starting diffusion benchmark: {self.n_images} images, {self.n_steps} steps each")
+        
         # 用子进程运行，避免在同一 Python 进程中 OOM 时影响采集线程
         script = self._build_script()
         script_path = Path(self.output_dir) / "_diffusion_worker.py"
-        script_path.write_text(script)
+        script_path.write_text(script, "utf-8")
+        logger.debug(f"[diffusion] Worker script written to: {script_path}")
 
         t0 = time.perf_counter()
         try:
+            logger.debug(f"[diffusion] Starting worker subprocess with 15min timeout")
             out = subprocess.check_output(
                 [sys.executable, str(script_path)],  # sys.executable = 当前 Python 路径，Windows/Linux 通用
                 stderr=subprocess.STDOUT,
@@ -99,31 +103,39 @@ class DiffusionBenchmark(BenchmarkRunner):
                 **_subprocess_kwargs(),
             )
             elapsed = time.perf_counter() - t0
+            logger.info(f"[diffusion] Worker completed in {elapsed:.2f}s")
+            
             # Worker 最后一行输出 JSON 指标
             lines = out.decode().strip().splitlines()
             worker_metrics = json.loads(lines[-1])
+            logger.debug(f"[diffusion] Worker metrics: {worker_metrics}")
         except subprocess.CalledProcessError as e:
             elapsed = time.perf_counter() - t0
-            logger.warning(f"  [warn] Diffusion worker failed: {e.output.decode()[-500:]}")
-            worker_metrics = {}
+            logger.warning(f"  [warn] Diffusion worker failed after {elapsed:.2f}s: {e.output.decode()[-500:]}")
+            worker_metrics = {"error": "process_failed"}
         except subprocess.TimeoutExpired:
             elapsed = time.perf_counter() - t0
-            logger.warning("  [warn] Diffusion worker timed out (15min)")
+            logger.warning(f"  [warn] Diffusion worker timed out after {elapsed:.2f}s (15min limit)")
             worker_metrics = {"error": "timeout"}
-        except (FileNotFoundError, json.JSONDecodeError):
+        except (FileNotFoundError, json.JSONDecodeError) as e:
             elapsed = time.perf_counter() - t0
-            logger.warning("  [warn] diffusers not available, using mock")
-            worker_metrics = {}
+            logger.warning(f"  [warn] Diffusion worker error ({type(e).__name__}): {e}")
+            worker_metrics = {"error": "dependency_missing"}
 
+        # 计算性能指标
+        total_steps = self.n_images * self.n_steps
+        it_per_s = total_steps / elapsed if elapsed > 0 else 0
+        seconds_per_image = elapsed / max(self.n_images, 1)
+        
+        logger.info(f"[diffusion] Results: {seconds_per_image:.2f}s per image, {it_per_s:.2f} iterations/s")
+        
         return {
             "n_images": self.n_images,
             "n_steps": self.n_steps,
-            "total_steps": self.n_images * self.n_steps,
+            "total_steps": total_steps,
             "total_elapsed_s": round(elapsed, 3),
-            "seconds_per_image": round(elapsed / max(self.n_images, 1), 3),
-            "it_per_s": round(
-                (self.n_images * self.n_steps) / elapsed, 3
-            ) if elapsed > 0 else 0,
+            "seconds_per_image": round(seconds_per_image, 3),
+            "it_per_s": round(it_per_s, 3),
             **worker_metrics,
         }
 

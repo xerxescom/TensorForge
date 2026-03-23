@@ -98,7 +98,8 @@ def check_ollama():
             ["ollama", "--version"],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
+            encoding="utf-8",
         )
         
         if result.returncode == 0:
@@ -121,7 +122,8 @@ def check_nvidia_smi():
             ["nvidia-smi", "--version"],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
+            encoding="utf-8"
         )
         
         if result.returncode == 0:

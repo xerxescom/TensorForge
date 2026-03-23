@@ -103,7 +103,7 @@ python check_deps.py
 python run_suite.py --gpu-name "RTX 4070" --output-dir results\rtx4070
 
 # Linux
-python run_suite.py --gpu-name "RTX 4090" --output-dir results/rtx4090
+python run_suite.py --gpu-name "RTX 4070" --output-dir results/rtx4070
 
 # 只测 LLM
 python run_suite.py --only llm llm_fp16 llm_context_scale

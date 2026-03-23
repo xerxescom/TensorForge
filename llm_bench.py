@@ -78,6 +78,7 @@ class LLMBenchmark(BenchmarkRunner):
                     capture_output=True,
                     text=True,
                     timeout=10,
+                    encoding="utf-8",
                     **_subprocess_kwargs(),
                 )
                 if result.returncode == 0:
@@ -100,19 +101,36 @@ class LLMBenchmark(BenchmarkRunner):
                 logger.warning("[llm] Local model not found, will try to download")
 
     def run_task(self) -> dict:
+        logger.info(f"[llm] Starting LLM benchmark: {self.n_runs} runs with model {self.model_name}")
+        start_time = time.time()
         run_results = []
 
         for i, prompt in enumerate(self.prompts[:self.n_runs]):
             logger.info(f"  LLM run {i + 1}/{self.n_runs} ...")
+            run_start = time.time()
             r = self._single_run(prompt)
+            run_elapsed = time.time() - run_start
+            
+            if r.get("error"):
+                logger.warning(f"  LLM run {i + 1} failed: {r.get('error')}")
+            else:
+                logger.debug(f"  LLM run {i + 1} completed in {run_elapsed:.2f}s: {r.get('tokens_generated', 0)} tokens, {r.get('tokens_per_s', 0):.1f} tokens/s")
+            
             run_results.append(r)
 
+        total_elapsed = time.time() - start_time
+        logger.info(f"[llm] All runs completed in {total_elapsed:.2f}s")
+        
         # 聚合
         ttfts = [r["ttft_s"] for r in run_results if r["ttft_s"] > 0]
         tps_list = [r["tokens_per_s"] for r in run_results if r["tokens_per_s"] > 0]
         elapsed_list = [r["total_elapsed_s"] for r in run_results if r["total_elapsed_s"] > 0]
         total_toks = sum(r["tokens_generated"] for r in run_results)
         success_count = sum(1 for r in run_results if not r.get("error"))
+        
+        logger.info(f"[llm] Results: {success_count}/{len(run_results)} successful, {total_toks} total tokens")
+        if tps_list:
+            logger.info(f"[llm] Performance: {sum(tps_list)/len(tps_list):.1f} avg tokens/s, {max(tps_list):.1f} max tokens/s")
 
         def _percentile(values: list[float], q: float) -> float:
             if not values:
@@ -146,6 +164,7 @@ class LLMBenchmark(BenchmarkRunner):
           - Windows 不支持逐行读 Popen.stdout（会阻塞），改用 communicate() 一次性读取
           - ollama --verbose 在旧版 Windows 安装包中可能不支持，fallback 到计时估算
         """
+        logger.debug(f"[llm] Starting single run with prompt length: {len(prompt)} chars")
         # ollama run 的参数在新版本统一，--verbose 输出 eval rate
         cmd = ["ollama", "run", self.model_name, prompt, "--verbose"]
 

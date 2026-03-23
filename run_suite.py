@@ -143,6 +143,7 @@ class ConcurrentStressTest:
                     capture_output=True,
                     text=True,
                     timeout=60,
+                    encoding="utf-8",
                     **_subprocess_kwargs(),
                 )
                 total_tokens += int(len(out.stdout.split()) * 1.3)

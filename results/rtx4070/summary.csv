@@ -1,0 +1,4 @@
+task,model,precision,status,start_time,duration_s,metric_success_count,metric_failure_count,metric_success_rate,metric_tokens_per_s_mean,metric_tokens_per_s_max,metric_tokens_per_s_min,metric_tokens_per_s_p50,metric_tokens_per_s_p95,metric_ttft_s_mean,metric_ttft_s_min,metric_ttft_s_p95,metric_response_elapsed_s_mean,metric_tokens_generated,metric_n_runs,metric_energy_j,metric_tokens_per_joule,gpu_util_mean,power_mean_w,power_max_w,temp_max_c,mem_used_max_mb,sampler_drop_rate
+llm_inference,llama3.1:8b,q4_k_m,success,2026-03-23T20:26:32,33.689,5,0,1.0,88.13,89.28,86.53,88.02,89.28,0.2297,0.1778,0.4241,6.7346,2682,5,6306.58,0.4253,93.32,187.2,196.71,61.0,7343.0,0.0
+llm_inference,llama3.1:8b,fp16,success,2026-03-23T20:27:11,34.804,5,0,1.0,88.81,90.39,87.03,89.07,90.39,0.247,0.1797,0.5132,6.9577,2758,5,6596.75,0.4181,93.1,189.54,197.22,62.0,7347.0,0.0
+llm_context_scale,llama3.1:8b,q4_k_m,success,2026-03-23T20:27:49,5.869,853.7,75.79,145.46,196.55,63.0,7302.0,0.0

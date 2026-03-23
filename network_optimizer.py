@@ -96,19 +96,42 @@ class NetworkOptimizer:
             urls = self.config.preferred_endpoints
         
         results = {}
-        logger.info("[network] Testing connectivity...")
+        logger.info(f"[network] Testing connectivity to {len(urls)} endpoints...")
         
-        for url in urls:
+        for i, url in enumerate(urls, 1):
+            logger.debug(f"[network] Testing endpoint {i}/{len(urls)}: {url}")
             try:
                 start_time = time.time()
+                logger.debug(f"[network] Opening connection to {url} with timeout={self.config.timeout}s")
                 response = urllib.request.urlopen(url, timeout=self.config.timeout)
                 elapsed = time.time() - start_time
-                results[url] = response.status == 200
-                logger.info(f"[network] {url}: OK ({elapsed:.2f}s)")
-            except Exception as e:
+                is_ok = response.status == 200
+                results[url] = is_ok
+                
+                if is_ok:
+                    logger.info(f"[network] {url}: OK ({elapsed:.2f}s, status={response.status})")
+                else:
+                    logger.warning(f"[network] {url}: HTTP {response.status} ({elapsed:.2f}s)")
+                    
+            except urllib.error.HTTPError as e:
+                elapsed = time.time() - start_time
                 results[url] = False
-                logger.warning(f"[network] {url}: FAILED ({e})")
+                logger.warning(f"[network] {url}: HTTP {e.code} ({elapsed:.2f}s) - {e.reason}")
+            except urllib.error.URLError as e:
+                elapsed = time.time() - start_time
+                results[url] = False
+                logger.warning(f"[network] {url}: URL Error ({elapsed:.2f}s) - {e.reason}")
+            except socket.timeout as e:
+                elapsed = time.time() - start_time
+                results[url] = False
+                logger.warning(f"[network] {url}: Timeout ({elapsed:.2f}s) - {e}")
+            except Exception as e:
+                elapsed = time.time() - start_time
+                results[url] = False
+                logger.warning(f"[network] {url}: FAILED ({elapsed:.2f}s) - {type(e).__name__}: {e}")
         
+        success_count = sum(1 for ok in results.values() if ok)
+        logger.info(f"[network] Connectivity test complete: {success_count}/{len(urls)} endpoints reachable")
         return results
     
     def get_best_endpoint(self, test_urls: List[str] = None) -> str:
@@ -116,6 +139,7 @@ class NetworkOptimizer:
         if test_urls is None:
             test_urls = self.config.preferred_endpoints[:2]
         
+        logger.debug(f"[network] Finding best endpoint from {len(test_urls)} candidates")
         connectivity = self.test_connectivity(test_urls)
         
         # 返回第一个可用的端点
@@ -130,15 +154,23 @@ class NetworkOptimizer:
     
     def optimize_socket_settings(self):
         """优化 socket 设置"""
+        logger.debug(f"[network] Optimizing socket settings: timeout={self.config.timeout}s, verify_ssl={self.config.verify_ssl}")
+        
         # 设置 socket 超时
         socket.setdefaulttimeout(self.config.timeout)
+        logger.debug(f"[network] Set default socket timeout to {self.config.timeout}s")
         
         # 优化缓冲区大小
         try:
             import ssl
-            ssl._create_default_https_context = ssl._create_unverified_context if not self.config.verify_ssl else ssl.create_default_context
+            if not self.config.verify_ssl:
+                ssl._create_default_https_context = ssl._create_unverified_context
+                logger.warning("[network] SSL verification disabled for better compatibility")
+            else:
+                ssl._create_default_https_context = ssl.create_default_context
+                logger.debug("[network] Using default SSL context with verification")
         except ImportError:
-            pass
+            logger.debug("[network] SSL module not available, skipping SSL optimization")
 
 
 class ProxyManager:
