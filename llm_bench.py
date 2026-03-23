@@ -152,6 +152,7 @@ class LLMBenchmark(BenchmarkRunner):
         total_elapsed_s = 0.0
         output_text = ""
         error = None
+        tokens_estimated = False
 
         try:
             proc = subprocess.Popen(
@@ -208,6 +209,7 @@ class LLMBenchmark(BenchmarkRunner):
                 est_tokens = int(len(output_text.split()) * 1.3)
                 tokens_per_s = round(est_tokens / decode_elapsed, 2) if decode_elapsed > 0 else 0
                 tokens_generated = tokens_generated or est_tokens
+                tokens_estimated = True
 
         except FileNotFoundError:
             error = "ollama_not_found"
@@ -227,6 +229,7 @@ class LLMBenchmark(BenchmarkRunner):
             "total_elapsed_s": total_elapsed_s,
             "tokens_per_s": tokens_per_s,
             "tokens_generated": tokens_generated,
+            "tokens_estimated": tokens_estimated,
             "error": error,
         }
 
