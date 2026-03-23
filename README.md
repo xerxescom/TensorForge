@@ -131,7 +131,7 @@ python generate_report.py results/rtx4070/final_report.json
 
 ### 推荐的导入方式
 
-优先通过 `tensorforge` 包导入；现在即使直接在仓库根目录开发，不安装包也可以使用 `from tensorforge...` 方式导入。
+优先从 `src/tensorforge/...` 下按职责导入，而不是继续在根目录互相引用。
 
 ```python
 from tensorforge.core.collector import BenchmarkRunner
@@ -188,7 +188,7 @@ from tensorforge.reporting.generate_report import generate
 
 ## 📌 迁移提示
 
-如果你之前习惯在根目录找实现代码，现在请直接进入 `src/tensorforge/`；同时也可以直接在仓库根目录运行 `from tensorforge...` 导入：
+如果你之前习惯在根目录找实现代码，现在请直接进入 `src/tensorforge/`：
 
 - 采样与基础设施：`src/tensorforge/core/`
 - benchmark 实现：`src/tensorforge/benchmarks/`
