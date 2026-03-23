@@ -17,6 +17,24 @@ class BenchmarkConfig:
     timeout_s: int = 120
     max_raw_samples: int = 1000
     adaptive_sampling: bool = True
+    cache_base_dir: str = "models_cache"
+    cache_max_size_gb: float = 50.0
+    cache_cleanup_old_models: bool = True
+    cache_model_retention_days: int = 30
+    network_timeout: int = 300
+    network_max_retries: int = 5
+    network_retry_delay: float = 2.0
+    network_use_proxy: bool = False
+    network_proxy_host: str | None = None
+    network_proxy_port: int | None = None
+    network_verify_ssl: bool = True
+    network_enable_hf_transfer: bool = True
+    network_preferred_endpoints: List[str] = None
+    error_enable_retries: bool = True
+    error_max_retries: int = 3
+    error_retry_backoff_factor: float = 2.0
+    error_classify_errors: bool = True
+    error_report_errors: bool = True
     
     # GPU 阈值
     high_utilization: float = 80.0
@@ -52,6 +70,11 @@ class BenchmarkConfig:
                 "What are the main causes and consequences of the French Revolution?",
                 "Explain how gradient descent works in machine learning.",
             ]
+        if self.network_preferred_endpoints is None:
+            self.network_preferred_endpoints = [
+                "https://huggingface.co",
+                "https://hf-mirror.com",
+            ]
 
 
 class ConfigManager:
@@ -78,6 +101,9 @@ class ConfigManager:
         default_settings = data.get('default_settings', {})
         gpu_thresholds = data.get('gpu_thresholds', {})
         models = data.get('models', {})
+        network = data.get('network', {})
+        cache = data.get('cache', {})
+        error_handling = data.get('error_handling', {})
         llm_model_cfg = models.get('llm', {})
         diffusion_model_cfg = models.get('diffusion', {})
         cv_model_cfg = models.get('cv', {})
@@ -95,6 +121,27 @@ class ConfigManager:
             timeout_s=default_settings.get('timeout_s', 120),
             max_raw_samples=default_settings.get('max_raw_samples', 1000),
             adaptive_sampling=default_settings.get('adaptive_sampling', True),
+            cache_base_dir=cache.get('base_dir', 'models_cache'),
+            cache_max_size_gb=cache.get('max_size_gb', 50.0),
+            cache_cleanup_old_models=cache.get('cleanup_old_models', True),
+            cache_model_retention_days=cache.get('model_retention_days', 30),
+            network_timeout=network.get('timeout', 300),
+            network_max_retries=network.get('max_retries', 5),
+            network_retry_delay=network.get('retry_delay', 2.0),
+            network_use_proxy=network.get('use_proxy', False),
+            network_proxy_host=network.get('proxy_host'),
+            network_proxy_port=network.get('proxy_port'),
+            network_verify_ssl=network.get('verify_ssl', True),
+            network_enable_hf_transfer=network.get('enable_hf_transfer', True),
+            network_preferred_endpoints=network.get(
+                'preferred_endpoints',
+                ["https://huggingface.co", "https://hf-mirror.com"],
+            ),
+            error_enable_retries=error_handling.get('enable_retries', True),
+            error_max_retries=error_handling.get('max_retries', 3),
+            error_retry_backoff_factor=error_handling.get('retry_backoff_factor', 2.0),
+            error_classify_errors=error_handling.get('classify_errors', True),
+            error_report_errors=error_handling.get('report_errors', True),
             
             high_utilization=gpu_thresholds.get('high_utilization', 80.0),
             low_utilization=gpu_thresholds.get('low_utilization', 20.0),
@@ -130,6 +177,26 @@ class ConfigManager:
                 'max_raw_samples': 1000,
                 'adaptive_sampling': True
             },
+            'network': {
+                'timeout': 300,
+                'max_retries': 5,
+                'retry_delay': 2.0,
+                'use_proxy': False,
+                'proxy_host': None,
+                'proxy_port': None,
+                'verify_ssl': True,
+                'enable_hf_transfer': True,
+                'preferred_endpoints': [
+                    'https://huggingface.co',
+                    'https://hf-mirror.com'
+                ]
+            },
+            'cache': {
+                'base_dir': 'models_cache',
+                'max_size_gb': 50,
+                'cleanup_old_models': True,
+                'model_retention_days': 30
+            },
             'gpu_thresholds': {
                 'high_utilization': 80.0,
                 'low_utilization': 20.0,
@@ -158,6 +225,13 @@ class ConfigManager:
                     'n_frames': 200,
                     'image_size': 640
                 }
+            },
+            'error_handling': {
+                'enable_retries': True,
+                'max_retries': 3,
+                'retry_backoff_factor': 2.0,
+                'classify_errors': True,
+                'report_errors': True
             }
         }
         

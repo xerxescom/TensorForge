@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
+from tf_logger import logger
+
 
 @dataclass
 class NetworkConfig:
@@ -22,6 +24,9 @@ class NetworkConfig:
     proxy_port: Optional[int] = None
     verify_ssl: bool = True
     user_agent: str = "TensorForge-Benchmark/1.0"
+    cache_dir: str = "models_cache"
+    enable_hf_transfer: bool = True
+    preferred_endpoints: Optional[List[str]] = None
 
 
 class NetworkOptimizer:
@@ -30,6 +35,12 @@ class NetworkOptimizer:
     def __init__(self, config: NetworkConfig = None):
         self.config = config or NetworkConfig()
         self.original_env = {}
+        if self.config.preferred_endpoints is None:
+            self.config.preferred_endpoints = [
+                "https://huggingface.co",
+                "https://hf-mirror.com",
+                "https://cdn-lfs.huggingface.co",
+            ]
         
     def setup_environment(self):
         """设置网络环境变量"""
@@ -45,10 +56,10 @@ class NetworkOptimizer:
         
         # 优化 Hugging Face 下载
         os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
-        os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
+        os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1' if self.config.enable_hf_transfer else '0'
         
         # 设置缓存目录
-        cache_dir = Path("models_cache")
+        cache_dir = Path(self.config.cache_dir)
         cache_dir.mkdir(exist_ok=True)
         os.environ['TRANSFORMERS_CACHE'] = str(cache_dir)
         os.environ['HF_HOME'] = str(cache_dir)
@@ -61,14 +72,14 @@ class NetworkOptimizer:
             proxy_url = f"http://{self.config.proxy_host}:{self.config.proxy_port}"
             os.environ['HTTP_PROXY'] = proxy_url
             os.environ['HTTPS_PROXY'] = proxy_url
-            print(f"[network] Using proxy: {proxy_url}")
+            logger.info(f"[network] Using proxy: {proxy_url}")
         
         # SSL 验证
         if not self.config.verify_ssl:
             os.environ['PYTHONHTTPSVERIFY'] = '0'
-            print("[network] SSL verification disabled")
+            logger.warning("[network] SSL verification disabled")
         
-        print("[network] Environment optimized for Hugging Face downloads")
+        logger.info("[network] Environment optimized for Hugging Face downloads")
     
     def restore_environment(self):
         """恢复原始环境变量"""
@@ -77,19 +88,15 @@ class NetworkOptimizer:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
-        print("[network] Environment restored")
+        logger.info("[network] Environment restored")
     
     def test_connectivity(self, urls: List[str] = None) -> Dict[str, bool]:
         """测试网络连接"""
         if urls is None:
-            urls = [
-                "https://huggingface.co",
-                "https://hf-mirror.com",
-                "https://cdn-lfs.huggingface.co"
-            ]
+            urls = self.config.preferred_endpoints
         
         results = {}
-        print("[network] Testing connectivity...")
+        logger.info("[network] Testing connectivity...")
         
         for url in urls:
             try:
@@ -97,31 +104,28 @@ class NetworkOptimizer:
                 response = urllib.request.urlopen(url, timeout=self.config.timeout)
                 elapsed = time.time() - start_time
                 results[url] = response.status == 200
-                print(f"[network] {url}: OK ({elapsed:.2f}s)")
+                logger.info(f"[network] {url}: OK ({elapsed:.2f}s)")
             except Exception as e:
                 results[url] = False
-                print(f"[network] {url}: FAILED ({e})")
+                logger.warning(f"[network] {url}: FAILED ({e})")
         
         return results
     
     def get_best_endpoint(self, test_urls: List[str] = None) -> str:
         """获取最佳端点"""
         if test_urls is None:
-            test_urls = [
-                "https://huggingface.co",
-                "https://hf-mirror.com"
-            ]
+            test_urls = self.config.preferred_endpoints[:2]
         
         connectivity = self.test_connectivity(test_urls)
         
         # 返回第一个可用的端点
         for url, is_available in connectivity.items():
             if is_available:
-                print(f"[network] Selected endpoint: {url}")
+                logger.info(f"[network] Selected endpoint: {url}")
                 return url
         
         # 如果都不可用，返回默认
-        print("[network] No endpoints available, using default")
+        logger.warning("[network] No endpoints available, using default")
         return "https://huggingface.co"
     
     def optimize_socket_settings(self):
@@ -161,7 +165,7 @@ class ProxyManager:
                     return host.strip(), int(port.strip())
             
         except Exception as e:
-            print(f"[proxy] System proxy detection failed: {e}")
+            logger.warning(f"[proxy] System proxy detection failed: {e}")
         
         return None
     
@@ -181,8 +185,8 @@ class ProxyManager:
 class DownloadOptimizer:
     """下载优化器"""
     
-    def __init__(self):
-        self.network_config = NetworkConfig()
+    def __init__(self, network_config: NetworkConfig | None = None):
+        self.network_config = network_config or NetworkConfig()
         self.network_optimizer = NetworkOptimizer(self.network_config)
         
     def setup(self):
@@ -195,7 +199,7 @@ class DownloadOptimizer:
                 self.network_config.use_proxy = True
                 self.network_config.proxy_host = host
                 self.network_config.proxy_port = port
-                print(f"[download] Detected system proxy: {host}:{port}")
+                logger.info(f"[download] Detected system proxy: {host}:{port}")
         
         # 设置环境
         self.network_optimizer.setup_environment()
@@ -204,7 +208,7 @@ class DownloadOptimizer:
         # 测试连接
         best_endpoint = self.network_optimizer.get_best_endpoint()
         if best_endpoint != "https://huggingface.co":
-            print(f"[download] Using mirror endpoint: {best_endpoint}")
+            logger.info(f"[download] Using mirror endpoint: {best_endpoint}")
     
     def cleanup(self):
         """清理设置"""
@@ -232,7 +236,7 @@ if __name__ == "__main__":
     connectivity = optimizer.test_connectivity()
     best_endpoint = optimizer.get_best_endpoint()
     
-    print(f"\nBest endpoint: {best_endpoint}")
-    print("Connectivity results:")
+    logger.info(f"Best endpoint: {best_endpoint}")
+    logger.info("Connectivity results:")
     for url, ok in connectivity.items():
-        print(f"  {url}: {'✓' if ok else '✗'}")
+        logger.info(f"  {url}: {'✓' if ok else '✗'}")

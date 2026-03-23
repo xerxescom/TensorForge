@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any
 import time
 import functools
 
+from config_manager import config_manager
 from tf_logger import logger
 
 
@@ -65,7 +66,12 @@ class ErrorClassifier:
 def retry_on_error(strategy: Optional[RetryStrategy] = None):
     """重试装饰器"""
     if strategy is None:
-        strategy = RetryStrategy()
+        config = config_manager.load_config()
+        strategy = RetryStrategy(
+            max_retries=config.error_max_retries if config.error_enable_retries else 0,
+            base_delay=1.0,
+            backoff_factor=config.error_retry_backoff_factor,
+        )
     
     def decorator(func):
         @functools.wraps(func)
@@ -82,6 +88,13 @@ def retry_on_error(strategy: Optional[RetryStrategy] = None):
                     last_exception = e
                     last_error_type = error_type
                     last_error_desc = error_desc
+                    config = config_manager.load_config()
+                    if config.error_report_errors:
+                        error_reporter.report_error(
+                            error_type,
+                            error_desc,
+                            context={"function": func.__name__, "attempt": attempt + 1},
+                        )
                     
                     if attempt == strategy.max_retries or not strategy.should_retry(error_type):
                         break
