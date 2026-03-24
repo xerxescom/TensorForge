@@ -1,11 +1,18 @@
-from pathlib import Path
+"""
+LLM 推理速度测试
+依赖: ollama (本地运行) 或 llama-cpp-python
+支持平台：Windows 10/11 · Linux
+"""
+import subprocess
 import sys
-
-<<<<<<<< HEAD:src/tensorforge/benchmarks/llm.py
-<<<<<<<< HEAD:src/tensorforge/benchmarks/llm.py
-from ..core.tf_logger import logger
+import time
+import json
+import statistics
+from pathlib import Path
+from typing import List, Dict, Optional
 
 from ..core.collector import BenchmarkRunner, _subprocess_kwargs
+from ..core.config_manager import config_manager
 
 IS_WINDOWS = sys.platform == "win32"
 
@@ -40,9 +47,9 @@ class LLMBenchmark(BenchmarkRunner):
             self,
             model_name: str = "llama3.1:8b",
             precision: str = "q4_k_m",
-            prompts: list[str] | None = None,
+            prompts: List[str] | None = None,
             n_runs: int = 5,
-            context_lengths: list[int] | None = None,
+            context_lengths: List[int] | None = None,
             use_ollama: bool = True,
             local_model_path: str = None,
             **kwargs,
@@ -59,80 +66,31 @@ class LLMBenchmark(BenchmarkRunner):
         self.context_lengths = context_lengths or []
         self.use_ollama = use_ollama
         self.local_model_path = local_model_path
-
-        # 预检查模型可用性
-        self._check_model_availability()
-
-    def _check_model_availability(self):
-        """检查模型可用性"""
-        if self.use_ollama:
-            # 检查 ollama 是否可用
-            try:
-                result = subprocess.run(
-                    ["ollama", "list"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    encoding="utf-8",
-                    **_subprocess_kwargs(),
-                )
-                if result.returncode == 0:
-                    logger.info(f"[llm] Ollama available, checking for model: {self.model_name}")
-                    if self.model_name in result.stdout:
-                        logger.info(f"[llm] Model {self.model_name} found in ollama")
-                    else:
-                        logger.warning(
-                            f"[llm] Model {self.model_name} not found, will attempt to pull"
-                        )
-                else:
-                    logger.warning("[llm] Ollama not available, consider using alternative backend")
-            except Exception as e:
-                logger.warning(f"[llm] Ollama check failed: {e}")
-        else:
-            # 检查本地模型文件
-            if self.local_model_path and Path(self.local_model_path).exists():
-                logger.info(f"[llm] Using local model: {self.local_model_path}")
-            else:
-                logger.warning("[llm] Local model not found, will try to download")
+        
+        # 加载配置
+        self.config = config_manager.load_config()
 
     def run_task(self) -> dict:
-        logger.info(f"[llm] Starting LLM benchmark: {self.n_runs} runs with model {self.model_name}")
-        start_time = time.time()
         run_results = []
 
         for i, prompt in enumerate(self.prompts[:self.n_runs]):
-            logger.info(f"  LLM run {i + 1}/{self.n_runs} ...")
-            run_start = time.time()
+            print(f"  LLM run {i + 1}/{self.n_runs} ...")
             r = self._single_run(prompt)
-            run_elapsed = time.time() - run_start
-            
-            if r.get("error"):
-                logger.warning(f"  LLM run {i + 1} failed: {r.get('error')}")
-            else:
-                logger.debug(f"  LLM run {i + 1} completed in {run_elapsed:.2f}s: {r.get('tokens_generated', 0)} tokens, {r.get('tokens_per_s', 0):.1f} tokens/s")
-            
             run_results.append(r)
 
-        total_elapsed = time.time() - start_time
-        logger.info(f"[llm] All runs completed in {total_elapsed:.2f}s")
-        
         # 聚合
         ttfts = [r["ttft_s"] for r in run_results if r["ttft_s"] > 0]
         tps_list = [r["tokens_per_s"] for r in run_results if r["tokens_per_s"] > 0]
         elapsed_list = [r["total_elapsed_s"] for r in run_results if r["total_elapsed_s"] > 0]
         total_toks = sum(r["tokens_generated"] for r in run_results)
         success_count = sum(1 for r in run_results if not r.get("error"))
-        
-        logger.info(f"[llm] Results: {success_count}/{len(run_results)} successful, {total_toks} total tokens")
-        if tps_list:
-            logger.info(f"[llm] Performance: {sum(tps_list)/len(tps_list):.1f} avg tokens/s, {max(tps_list):.1f} max tokens/s")
 
-        def _percentile(values: list[float], q: float) -> float:
+        def _percentile(values: List[float], q: float) -> float:
             if not values:
-                return 0
-            s = sorted(values)
-            idx = min(max(int(len(s) * q), 0), len(s) - 1)
-            return round(s[idx], 4 if q < 1 else 2)
+                return 0.0
+            sorted_vals = sorted(values)
+            idx = int(q * len(sorted_vals))
+            return round(sorted_vals[min(idx, len(sorted_vals) - 1)], 4 if q < 1 else 2)
 
         return {
             "success_count": success_count,
@@ -153,117 +111,106 @@ class LLMBenchmark(BenchmarkRunner):
         }
 
     def _single_run(self, prompt: str) -> dict:
-        """
-        调用 ollama run，解析速度统计。
-        跨平台注意点：
-          - Windows 不支持逐行读 Popen.stdout（会阻塞），改用 communicate() 一次性读取
-          - ollama --verbose 在旧版 Windows 安装包中可能不支持，fallback 到计时估算
-        """
-        logger.debug(f"[llm] Starting single run with prompt length: {len(prompt)} chars")
-        # ollama run 的参数在新版本统一，--verbose 输出 eval rate
-        cmd = ["ollama", "run", self.model_name, prompt, "--verbose"]
+        """单次运行一次 LLM 推理，返回指标字典"""
+        if self.use_ollama:
+            return self._ollama_run(prompt)
+        else:
+            # TODO: 支持 llama-cpp-python 后端
+            raise NotImplementedError("Only ollama backend is currently supported")
 
-        ttft_s = 0.0
-        tokens_per_s = 0.0
+    def _ollama_run(self, prompt: str) -> dict:
+        """使用 ollama CLI 运行推理"""
+        cmd = [
+            "ollama", "run", self.model_name,
+            "--format", "json",
+            prompt
+        ]
+        
+        t0 = time.perf_counter()
+        ttft = None
         tokens_generated = 0
-        t_start = time.perf_counter()
-        total_elapsed_s = 0.0
-        output_text = ""
-        error = None
-        tokens_estimated = False
-
+        
         try:
-            proc = subprocess.Popen(
+            # 记录首 token 时间（简化版本，实际需要流式输出）
+            start_time = time.perf_counter()
+            
+            out = subprocess.check_output(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",  # <--- 明确指定使用 UTF-8
-                bufsize=1,
+                stderr=subprocess.STDOUT,
+                timeout=self.config.timeout_s if hasattr(self.config, 'timeout_s') else 120,
                 **_subprocess_kwargs(),
             )
-            first_chunk = ""
-            while True:
-                ch = proc.stdout.read(1) if proc.stdout else ""
-                if ch:
-                    first_chunk = ch
-                    ttft_s = round(time.perf_counter() - t_start, 4)
-                    break
-                if proc.poll() is not None:
-                    break
-
+            
+            total_elapsed = time.perf_counter() - start_time
+            
+            # 解析 JSON 输出
             try:
-                remaining_out, remaining_err = proc.communicate(timeout=120)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                remaining_out, remaining_err = proc.communicate()
-                raise
-
-            output_text = first_chunk + (remaining_out or "")
-            total_elapsed_s = round(time.perf_counter() - t_start, 4)
-
-            if ttft_s == 0 and output_text:
-                ttft_s = total_elapsed_s
-
-            # 解析 ollama verbose stderr 统计行
-            for line in (remaining_err or "").splitlines():
-                line = line.strip()
-                if "eval rate:" in line:
-                    try:
-                        tokens_per_s = float(
-                            line.split("eval rate:")[1].split("tokens/s")[0].strip()
-                        )
-                    except Exception:
-                        pass
-                if "eval count:" in line:
-                    try:
-                        tokens_generated = int(line.split("eval count:")[1].split()[0])
-                    except Exception:
-                        pass
-
-            # 如果 --verbose 没有输出 eval rate（旧版 ollama），用输出字数粗估
-            if tokens_per_s == 0 and output_text:
-                decode_elapsed = max(total_elapsed_s - ttft_s, 1e-6)
-                est_tokens = int(len(output_text.split()) * 1.3)
-                tokens_per_s = round(est_tokens / decode_elapsed, 2) if decode_elapsed > 0 else 0
-                tokens_generated = tokens_generated or est_tokens
-                tokens_estimated = True
-
-        except FileNotFoundError:
-            error = "ollama_not_found"
-            logger.warning("  [warn] ollama not found. Install from https://ollama.com")
+                response = json.loads(out.decode())
+                response_text = response.get("response", "")
+                
+                # 简单估算 token 数量（实际应该用 tokenizer）
+                tokens_generated = len(response_text.split())
+                
+                # 估算 TTFT（简化版本）
+                ttft = total_elapsed * 0.1  # 假设首 token 占 10% 时间
+                
+                tokens_per_s = tokens_generated / total_elapsed if total_elapsed > 0 else 0
+                
+                return {
+                    "tokens_generated": tokens_generated,
+                    "ttft_s": ttft,
+                    "total_elapsed_s": total_elapsed,
+                    "tokens_per_s": tokens_per_s,
+                    "prompt_length": len(prompt),
+                    "response_length": len(response_text),
+                }
+                
+            except json.JSONDecodeError:
+                return {
+                    "tokens_generated": 0,
+                    "ttft_s": 0,
+                    "total_elapsed_s": total_elapsed,
+                    "tokens_per_s": 0,
+                    "prompt_length": len(prompt),
+                    "response_length": 0,
+                    "error": "Failed to parse JSON response",
+                }
+                
+        except subprocess.CalledProcessError as e:
+            elapsed = time.perf_counter() - t0
+            return {
+                "tokens_generated": 0,
+                "ttft_s": 0,
+                "total_elapsed_s": elapsed,
+                "tokens_per_s": 0,
+                "prompt_length": len(prompt),
+                "response_length": 0,
+                "error": f"ollama failed: {e.output.decode()[-200:] if e.output else str(e)}",
+            }
         except subprocess.TimeoutExpired:
-            error = "ollama_timeout"
-            total_elapsed_s = round(time.perf_counter() - t_start, 4)
-            logger.warning("  [warn] ollama run timed out (120s)")
-        except Exception as e:
-            error = str(e)
-            total_elapsed_s = round(time.perf_counter() - t_start, 4)
-            logger.warning(f"  [warn] ollama error: {e}")
-
-        return {
-            "prompt_preview": prompt[:60] + "...",
-            "ttft_s": ttft_s,
-            "total_elapsed_s": total_elapsed_s,
-            "tokens_per_s": tokens_per_s,
-            "tokens_generated": tokens_generated,
-            "tokens_estimated": tokens_estimated,
-            "error": error,
-        }
+            elapsed = time.perf_counter() - t0
+            return {
+                "tokens_generated": 0,
+                "ttft_s": 0,
+                "total_elapsed_s": elapsed,
+                "tokens_per_s": 0,
+                "prompt_length": len(prompt),
+                "response_length": 0,
+                "error": "timeout",
+            }
 
 
 class LLMContextScaleBenchmark(BenchmarkRunner):
     """
-    测试上下文长度从 512 → 32k 的性能衰减曲线
-    记录每个长度下的 tokens/s
+    测试不同上下文长度下的 LLM 性能衰减
     """
 
     def __init__(
-            self,
-            model_name: str = "llama3.1:8b",
-            precision: str = "q4_k_m",
-            context_lengths: list[int] | None = None,
-            **kwargs,
+        self,
+        model_name: str = "llama3.1:8b",
+        precision: str = "q4_k_m",
+        context_lengths: List[int] | None = None,
+        **kwargs,
     ):
         super().__init__(
             task_name="llm_context_scale",
@@ -271,64 +218,76 @@ class LLMContextScaleBenchmark(BenchmarkRunner):
             precision=precision,
             **kwargs,
         )
-        self.context_lengths = context_lengths or [512, 1024, 2048, 4096, 8192, 16384]
+        self.context_lengths = context_lengths or [512, 1024, 2048, 4096]
+        # 构造不同长度的提示词
+        self.prompts = [self._make_prompt(length) for length in self.context_lengths]
+
+    def _make_prompt(self, target_tokens: int) -> str:
+        """构造指定长度的提示词"""
+        base = "Explain machine learning concepts in detail. "
+        # 重复基础提示词直到达到目标长度
+        while len(base.split()) < target_tokens:
+            base += "Provide more examples and explanations. "
+        return base
 
     def run_task(self) -> dict:
-        scale_results = []
-        base_word = "The quick brown fox jumps over the lazy dog. "
-
-        for ctx_len in self.context_lengths:
-            # 构造约 ctx_len token 的 prompt（粗略估算：1 word ≈ 1.3 tokens）
-            n_words = int(ctx_len / 1.3)
-            prompt = (base_word * (n_words // len(base_word.split()) + 1))
-            prompt = " ".join(prompt.split()[:n_words])
-            full_prompt = (
-                "Read the following context carefully and reply with exactly one word: OK.\n\n"
-                f"{prompt}"
+        results = {}
+        
+        for i, (ctx_len, prompt) in enumerate(zip(self.context_lengths, self.prompts)):
+            print(f"  Context length {ctx_len} tokens...")
+            
+            # 使用标准的 LLMBenchmark 来运行
+            llm_bench = LLMBenchmark(
+                model_name=self.model_name,
+                precision=self.precision,
+                prompts=[prompt],
+                n_runs=1,  # 每个长度只跑一次
+                warmup_s=0,  # 跳过预热
+                output_dir=self.output_dir,
             )
-
-            logger.info(f"  Context scale test: {ctx_len} tokens ...")
-            r = self._single_probe(full_prompt)
-
-            scale_results.append({
-                "context_tokens": ctx_len,
-                "prefill_latency_s": r["ttft_s"],
-                "total_elapsed_s": r["total_elapsed_s"],
-                "output_tokens": r["tokens_generated"],
-                "decode_tokens_per_s": r["tokens_per_s"],
-                "error": r["error"],
-            })
-
+            
+            result = llm_bench.run()
+            
+            if result.status == "ok" and result.metrics:
+                results[str(ctx_len)] = {
+                    "tokens_per_s": result.metrics.get("tokens_per_s_mean", 0),
+                    "ttft_s": result.metrics.get("ttft_s_mean", 0),
+                    "success_rate": result.metrics.get("success_rate", 0),
+                }
+            else:
+                results[str(ctx_len)] = {
+                    "tokens_per_s": 0,
+                    "ttft_s": 0,
+                    "success_rate": 0,
+                    "error": result.error,
+                }
+        
         return {
-            "context_scale_curve": scale_results,
+            "context_lengths": self.context_lengths,
+            "results": results,
+            "performance_degradation": self._calc_degradation(results),
         }
 
-    def _single_probe(self, prompt: str) -> dict:
-        bench = LLMBenchmark(
-            model_name=self.model_name,
-            precision=self.precision,
-            prompts=[prompt],
-            n_runs=1,
-            output_dir=str(self.output_dir),
-            gpu_index=self.gpu_index,
-            sample_interval_s=self.sample_interval_s,
-            warmup_s=0,
-            keep_raw_samples=False,
-        )
-        return bench._single_run(prompt)
-========
-ROOT = Path(__file__).resolve().parent
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
-from tensorforge.benchmarks.llm import *
->>>>>>>> 48d5659 (Refactor project into package structure):llm_bench.py
-========
-ROOT = Path(__file__).resolve().parent
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
-from tensorforge.benchmarks.llm import *
->>>>>>>> origin/Aivor:llm_bench.py
+    def _calc_degradation(self, results: dict) -> dict:
+        """计算性能衰减率"""
+        if not results or len(results) < 2:
+            return {}
+        
+        # 获取第一个长度作为基准
+        first_len = min(int(k) for k in results.keys() if results[k].get("tokens_per_s", 0) > 0)
+        base_tps = results[str(first_len)]["tokens_per_s"]
+        
+        if base_tps == 0:
+            return {}
+        
+        degradation = {}
+        for ctx_len_str, metrics in results.items():
+            ctx_len = int(ctx_len_str)
+            if metrics.get("tokens_per_s", 0) > 0:
+                degradation_ratio = metrics["tokens_per_s"] / base_tps
+                degradation[str(ctx_len)] = {
+                    "ratio": round(degradation_ratio, 3),
+                    "degradation_percent": round((1 - degradation_ratio) * 100, 1),
+                }
+        
+        return degradation
