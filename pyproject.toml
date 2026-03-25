@@ -83,10 +83,11 @@ Repository = "https://github.com/tensorforge/tensorforge.git"
 tensorforge = "src.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["src*"]
 
 [tool.setuptools.package-data]
-"" = ["*.yaml", "*.json", "*.txt"]
+"*" = ["*.yaml", "*.json", "*.txt"]
 
 # Black 代码格式化
 [tool.black]

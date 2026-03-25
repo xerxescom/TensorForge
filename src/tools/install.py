@@ -113,6 +113,32 @@ def install_requirements():
         return False
 
 
+def install_cli_command():
+    """安装 CLI 命令入口"""
+    print("\n🧩 Installing TensorForge CLI command...")
+
+    project_root = Path(__file__).resolve().parents[2]
+
+    try:
+        subprocess.check_call(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--no-build-isolation",
+                "-e",
+                str(project_root),
+            ]
+        )
+        print("✅ CLI command installed: tensorforge")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"❌ CLI command installation failed: {e}")
+        print("   Fallback: python -m src.cli --help")
+        return False
+
+
 def check_ollama():
     """检查 Ollama"""
     try:
@@ -181,7 +207,13 @@ def main():
     if not install_requirements():
         print("❌ Failed to install dependencies")
         sys.exit(1)
-    
+
+    # 安装 CLI 命令入口
+    cli_ok = install_cli_command()
+    if not cli_ok:
+        print("❌ Failed to install CLI command")
+        sys.exit(1)
+
     # 检查系统工具
     print("\n🔍 Checking system tools...")
     nvidia_ok = check_nvidia_smi()
@@ -192,6 +224,7 @@ def main():
     print("📋 Installation Summary:")
     print(f"✅ PyTorch: Installed")
     print(f"✅ Dependencies: Installed")
+    print(f"{'✅' if cli_ok else '❌'} CLI command: {'Installed' if cli_ok else 'Not installed'}")
     print(f"{'✅' if nvidia_ok else '❌'} nvidia-smi: {'Available' if nvidia_ok else 'Not available'}")
     print(f"{'✅' if ollama_ok else '⚠️'} Ollama: {'Available' if ollama_ok else 'Not available (optional)'}")
     
