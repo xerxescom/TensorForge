@@ -301,10 +301,15 @@ class CVBenchmark(BenchmarkRunner):
             elapsed = time.perf_counter() - t0
             lines = out.decode().strip().splitlines()
             worker_metrics = json.loads(lines[-1])
-        except Exception as e:
+        except subprocess.CalledProcessError as e:
+            elapsed = time.perf_counter() - t0
+            output_tail = (e.output or b"").decode(errors="ignore")[-800:]
+            logger.warning(f"  [warn] CV worker failed after {elapsed:.2f}s: {output_tail}")
+            worker_metrics = {"error": "process_failed"}
+        except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as e:
             elapsed = time.perf_counter() - t0
             logger.warning(f"  [warn] CV worker failed: {e}")
-            worker_metrics = {}
+            worker_metrics = {"error": type(e).__name__}
 
         return {
             "n_frames": self.n_frames,
@@ -317,33 +322,36 @@ class CVBenchmark(BenchmarkRunner):
     def _build_script(self) -> str:
         half = "True" if self.precision == "fp16" else "False"
         return f"""
-import torch, time, json, numpy as np
+import json, time
+import numpy as np
+import torch
 from ultralytics import YOLO
 
-model = YOLO("{self.model_name}.pt")
-dummy = torch.zeros(1, 3, {self.image_size}, {self.image_size}).cuda()
 half = {half}
-if half:
-    model.model.half()
-    dummy = dummy.half()
+device = "cuda:0" if torch.cuda.is_available() else "cpu"
+model = YOLO("{self.model_name}.pt")
+
+# 使用 numpy 图像输入，避免不同 ultralytics 版本对 tensor 输入行为不一致
+frame = np.zeros(({self.image_size}, {self.image_size}, 3), dtype=np.uint8)
 
 # Warm-up
 for _ in range(10):
-    model(dummy, verbose=False)
+    model.predict(frame, imgsz={self.image_size}, device=device, half=(half and device.startswith("cuda")), verbose=False)
 
 latencies = []
 for _ in range({self.n_frames}):
     t0 = time.perf_counter()
-    model(dummy, verbose=False)
+    model.predict(frame, imgsz={self.image_size}, device=device, half=(half and device.startswith("cuda")), verbose=False)
     latencies.append((time.perf_counter() - t0) * 1000)  # ms
 
 lat = sorted(latencies)
 n = len(lat)
 print(json.dumps({{
-    "fps":        round(1000 / (sum(latencies)/n), 2),
-    "latency_p50_ms": round(lat[int(n*0.50)], 3),
-    "latency_p95_ms": round(lat[int(n*0.95)], 3),
-    "latency_p99_ms": round(lat[int(n*0.99)], 3),
+    "device": device,
+    "fps": round(1000 / (sum(latencies) / n), 2),
+    "latency_p50_ms": round(lat[int(n * 0.50)], 3),
+    "latency_p95_ms": round(lat[int(n * 0.95)], 3),
+    "latency_p99_ms": round(lat[int(n * 0.99)], 3),
     "latency_min_ms": round(lat[0], 3),
     "latency_max_ms": round(lat[-1], 3),
 }}))
