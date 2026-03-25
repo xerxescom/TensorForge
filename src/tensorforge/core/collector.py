@@ -3,19 +3,17 @@ GPU Benchmark - Automated Data Collector
 后台持续采样 GPU 状态，与任意测试任务解耦
 支持平台：Windows 10/11 · Linux
 """
-import threading
-import time
-import json
 import csv
+import json
+import statistics
 import subprocess
 import sys
-import platform
+import threading
+import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
-from collections import deque
-import statistics
 
 # ── 平台工具 ────────────────────────────────────────────────────────────────
 

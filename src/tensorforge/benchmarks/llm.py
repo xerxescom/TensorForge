@@ -3,13 +3,11 @@ LLM 推理速度测试
 依赖: ollama (本地运行) 或 llama-cpp-python
 支持平台：Windows 10/11 · Linux
 """
+import json
 import subprocess
 import sys
 import time
-import json
-import statistics
-from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List
 
 from ..core.collector import BenchmarkRunner, _subprocess_kwargs
 from ..core.config_manager import config_manager
