@@ -83,7 +83,8 @@ Repository = "https://github.com/tensorforge/tensorforge.git"
 tensorforge = "src.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["src*"]
 
 [tool.setuptools.package-data]
 "" = ["*.yaml", "*.json", "*.txt"]
