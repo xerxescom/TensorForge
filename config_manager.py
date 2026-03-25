@@ -4,7 +4,7 @@
 import yaml
 from pathlib import Path
 from typing import Dict, Any, List
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from tf_logger import logger
 
@@ -29,7 +29,12 @@ class BenchmarkConfig:
     network_proxy_port: int | None = None
     network_verify_ssl: bool = True
     network_enable_hf_transfer: bool = True
-    network_preferred_endpoints: List[str] = None
+    network_preferred_endpoints: List[str] = field(
+        default_factory=lambda: [
+            "https://huggingface.co",
+            "https://hf-mirror.com",
+        ]
+    )
     error_enable_retries: bool = True
     error_max_retries: int = 3
     error_retry_backoff_factor: float = 2.0
@@ -43,7 +48,15 @@ class BenchmarkConfig:
     max_power_draw: float = 450.0
     
     # 模型配置
-    llm_prompts: List[str] = None
+    llm_prompts: List[str] = field(
+        default_factory=lambda: [
+            "Explain the difference between a transformer and an RNN in detail.",
+            "Write a Python function to compute Fibonacci numbers recursively with memoization.",
+            "Describe the water cycle in 300 words.",
+            "What are the main causes and consequences of the French Revolution?",
+            "Explain how gradient descent works in machine learning.",
+        ]
+    )
     llm_model: str = "llama3.1:8b"
     llm_precision: str = "q4_k_m"
     llm_backend: str = "ollama"
@@ -62,6 +75,7 @@ class BenchmarkConfig:
     concurrent_duration_s: int = 60
     
     def __post_init__(self):
+        # 兼容调用方传入 None 的情况，保持向后兼容
         if self.llm_prompts is None:
             self.llm_prompts = [
                 "Explain the difference between a transformer and an RNN in detail.",
@@ -88,8 +102,23 @@ class ConfigManager:
         """从 YAML 文件加载配置"""
         if self._config is None:
             if self.config_path.exists():
-                with open(self.config_path, 'r', encoding='utf-8') as f:
-                    data = yaml.safe_load(f)
+                try:
+                    with open(self.config_path, 'r', encoding='utf-8') as f:
+                        data = yaml.safe_load(f)
+                except yaml.YAMLError as e:
+                    logger.warning(f"Config file {self.config_path} YAML parse failed: {e}; using defaults")
+                    self._config = BenchmarkConfig()
+                    return self._config
+
+                if data is None:
+                    logger.warning(f"Config file {self.config_path} is empty, using defaults")
+                    self._config = BenchmarkConfig()
+                elif not isinstance(data, dict):
+                    logger.warning(
+                        f"Config file {self.config_path} must be a YAML mapping, got {type(data).__name__}; using defaults"
+                    )
+                    self._config = BenchmarkConfig()
+                else:
                     self._config = self._dict_to_config(data)
             else:
                 logger.warning(f"Config file {self.config_path} not found, using defaults")
