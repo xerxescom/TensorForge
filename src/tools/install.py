@@ -100,7 +100,7 @@ def install_requirements():
     """安装其他依赖"""
     print("\n📦 Installing other dependencies...")
     
-    requirements_file = Path(__file__).parent / "requirements.txt"
+    requirements_file = Path(__file__).resolve().parents[2] / "requirements.txt"
     
     try:
         subprocess.check_call([
@@ -208,8 +208,8 @@ def main():
     print("\n🎉 Installation completed!")
     print("\nNext steps:")
     print("1. Run dependency check: python check_deps.py")
-    print("2. Test model download: python test_models.py")
-    print("3. Run benchmark: python run_suite.py")
+    print("2. Test model download: python -m src.tools.test_models")
+    print("3. Run benchmark: python -m src.benchmarks.suite --mode full")
     
     return True
 

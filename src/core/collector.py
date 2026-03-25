@@ -280,13 +280,15 @@ class GPUSampler:
                     "error_rate": self._error_count / max(self._query_count, 1),
                     "avg_latency_ms": 0,
                     "last_error": self._last_error,
+                    "mean_util": 0.0,
+                    "mean_power": 0.0,
                 }
             
             gpu_utils = [s.gpu_util for s in self._samples]
             power_vals = [s.power_w for s in self._samples if s.power_w > 0]
             temps = [s.temp_c for s in self._samples if s.temp_c > 0]
             
-            return {
+            stats = {
                 "query_count": self._query_count,
                 "error_count": self._error_count,
                 "timeout_count": self._timeout_count,
@@ -302,6 +304,10 @@ class GPUSampler:
                 "temp_mean": round(statistics.mean(temps), 2) if temps else 0,
                 "temp_max": max(temps) if temps else 0,
             }
+            # 向后兼容旧字段名
+            stats["mean_util"] = stats["gpu_util_mean"]
+            stats["mean_power"] = stats["power_mean"]
+            return stats
 
 
 class BenchmarkRunner:
@@ -314,7 +320,7 @@ class BenchmarkRunner:
         self,
         task_name: str,
         model_name: str,
-        precision: str,
+        precision: str = "fp16",
         gpu_index: int = 0,
         warmup_s: float = 5.0,
         timeout_s: int = 120,

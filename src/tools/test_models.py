@@ -49,6 +49,7 @@ def test_model_download():
 
     except Exception as e:
         print(f"✗ Model management test failed: {e}")
+        raise
 
 
 def test_benchmark_integration():
@@ -86,6 +87,7 @@ def test_benchmark_integration():
 
     except Exception as e:
         print(f"✗ Benchmark integration test failed: {e}")
+        raise
 
 
 def test_import_system():
@@ -113,7 +115,7 @@ def test_import_system():
 
         # 测试主包导入
         print("\n3. Testing main package import...")
-        import tensorforge
+        import src
         print("✓ Main package imported successfully")
 
         print("\n✓ Import system test completed")
@@ -122,6 +124,7 @@ def test_import_system():
         print(f"✗ Import system test failed: {e}")
         import traceback
         traceback.print_exc()
+        raise
 
 
 def main():
@@ -152,7 +155,7 @@ def main():
     if passed == len(tests):
         print("🎉 All tests passed! System is ready for use.")
         print("\nNext steps:")
-        print("1. Run benchmarks: python -m tensorforge.cli llm")
+        print("1. Run benchmarks: python -m src.cli llm")
         print("2. Run tests: python -m pytest")
         print("3. Check documentation: README.md")
     else:

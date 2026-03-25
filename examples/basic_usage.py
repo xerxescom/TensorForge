@@ -5,12 +5,12 @@ TensorForge 基础使用示例
 import sys
 from pathlib import Path
 
-# 添加 src 目录到路径
-src_path = Path(__file__).parent.parent / "src"
-if str(src_path) not in sys.path:
-    sys.path.insert(0, str(src_path))
+# 添加项目根目录到路径
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
-from src.tensorforge import LLMBenchmark, GPUSampler, config_manager
+from src import LLMBenchmark, GPUSampler, config_manager
 
 def basic_llm_benchmark():
     """基础 LLM 基准测试示例"""
