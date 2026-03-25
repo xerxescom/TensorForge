@@ -40,20 +40,20 @@ tensorforge monitor --duration 60
 
 # Python API
 python -c "
-from benchmarks import LLMBenchmark
+from src import LLMBenchmark
 bench = LLMBenchmark(model_name='llama3.1:8b')
 result = bench.run()
 print(f\"Tokens/s: {result.metrics['tokens_per_s_mean']:.1f}\")
 "
 
 # 完整测试套件
-python run_suite.py --mode full
+python -m src.benchmarks.suite --mode full
 ```
 
 ### 生成报告
 
 ```bash
-python generate_report.py results/final_report.json
+python -m src.reporting.generate_report results/final_report.json
 ```
 
 ## ⚙️ 配置
@@ -88,7 +88,7 @@ models:
 ## �️ 扩展
 
 ```python
-from benchmarks import BenchmarkRunner
+from src.core.collector import BenchmarkRunner
 
 class MyBenchmark(BenchmarkRunner):
     def run_task(self) -> dict:
@@ -103,9 +103,9 @@ class MyBenchmark(BenchmarkRunner):
 |------|------|
 | nvidia-smi 找不到 | Windows: `where nvidia-smi` / Linux: `which nvidia-smi` |
 | Ollama 连接失败 | `ollama list` 检查服务；重启 Ollama 服务 |
-| 模型下载失败 | `python install.py --mirror hf-mirror.com` |
+| 模型下载失败 | `python -m src.tools.test_models` 检查模型缓存与下载路径 |
 
-调试模式：`python run_suite.py --verbose`
+调试模式：`python -m src.benchmarks.suite --verbose`
 
 ## 📄 许可证
 

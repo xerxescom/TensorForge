@@ -80,7 +80,7 @@ Repository = "https://github.com/tensorforge/tensorforge.git"
 "Bug Tracker" = "https://github.com/tensorforge/tensorforge/issues"
 
 [project.scripts]
-tensorforge = "cli:main"
+tensorforge = "src.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -146,6 +146,7 @@ ignore_missing_imports = true
 minversion = "7.0"
 addopts = "-ra -q --strict-markers --strict-config"
 testpaths = ["tests"]
+pythonpath = ["."]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]

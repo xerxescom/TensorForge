@@ -218,7 +218,7 @@ black src/ isort src/  # 代码格式化
 ### Python API 使用
 
 ```python
-from benchmarks import LLMBenchmark, GPUSampler
+from src import LLMBenchmark, GPUSampler
 
 # 完整测试
 bench = LLMBenchmark(model_name="llama3.1:8b", n_runs=5)

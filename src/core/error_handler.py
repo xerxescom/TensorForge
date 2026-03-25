@@ -32,6 +32,8 @@ class ErrorHandler:
     
     def __init__(self, retry_strategy: Optional[RetryStrategy] = None):
         self.retry_strategy = retry_strategy or RetryStrategy()
+        # 向后兼容旧属性名
+        self.strategy = self.retry_strategy
         self.error_counts: Dict[str, int] = {}
     
     def classify_error(self, error: Exception) -> ErrorType:
