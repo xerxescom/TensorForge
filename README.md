@@ -8,13 +8,15 @@
 
 ```text
 TensorForge/
-├── src/tensorforge/              # 主包
+├── src/                          # 源代码
 │   ├── benchmarks/               # LLM/多模态/并发压测
 │   ├── core/                     # GPU采样、配置、错误处理
 │   ├── reporting/                # HTML报告生成
-│   └── tools/                    # 安装/检查脚本
+│   ├── tools/                    # 安装/检查脚本
+│   └── cli.py                    # CLI入口
 ├── examples/                     # 使用示例
 ├── docs/                         # 架构文档
+├── tests/                        # 测试
 ├── results/                      # 测试结果 (自动生成)
 ├── config.yaml                   # 配置文件
 └── requirements*.txt               # 依赖文件
@@ -38,7 +40,7 @@ tensorforge monitor --duration 60
 
 # Python API
 python -c "
-from tensorforge import LLMBenchmark
+from benchmarks import LLMBenchmark
 bench = LLMBenchmark(model_name='llama3.1:8b')
 result = bench.run()
 print(f\"Tokens/s: {result.metrics['tokens_per_s_mean']:.1f}\")
@@ -86,7 +88,7 @@ models:
 ## �️ 扩展
 
 ```python
-from tensorforge import BenchmarkRunner
+from benchmarks import BenchmarkRunner
 
 class MyBenchmark(BenchmarkRunner):
     def run_task(self) -> dict:

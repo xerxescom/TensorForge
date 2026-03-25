@@ -8,7 +8,7 @@
 
 ```
 TensorForge/
-├── src/tensorforge/
+├── src/                         # 源代码
 │   ├── benchmarks/              # 测试实现
 │   │   ├── llm.py              # LLMBenchmark, LLMContextScaleBenchmark
 │   │   ├── multimodal.py       # MultimodalBenchmark, CrossModalBenchmark  
@@ -20,8 +20,10 @@ TensorForge/
 │   │   ├── model_manager.py    # 模型下载缓存
 │   │   └── network_optimizer.py # 镜像源切换
 │   ├── reporting/               # HTML报告生成
-│   └── tools/                   # 安装/检查脚本
+│   ├── tools/                   # 安装/检查脚本
+│   └── cli.py                   # CLI入口
 ├── examples/                    # 使用示例
+├── tests/                       # 测试
 ├── docs/                        # 本文档
 └── config.yaml                  # 配置文件
 ```
@@ -150,7 +152,7 @@ class BenchmarkResult:
 ### 添加新基准测试
 
 ```python
-# src/tensorforge/benchmarks/my_benchmark.py
+# src/benchmarks/my_benchmark.py
 from ..core.collector import BenchmarkRunner
 
 class MyBenchmark(BenchmarkRunner):
@@ -166,14 +168,14 @@ class MyBenchmark(BenchmarkRunner):
 
 注册到包:
 ```python
-# src/tensorforge/__init__.py
+# src/__init__.py
 from .benchmarks.my_benchmark import MyBenchmark
 __all__ = [..., "MyBenchmark"]
 ```
 
 添加 CLI:
 ```python
-# src/tensorforge/cli.py
+# src/cli.py
 from .benchmarks.my_benchmark import MyBenchmark
 
 def run_my(args):
@@ -216,7 +218,7 @@ black src/ isort src/  # 代码格式化
 ### Python API 使用
 
 ```python
-from tensorforge import LLMBenchmark, GPUSampler
+from benchmarks import LLMBenchmark, GPUSampler
 
 # 完整测试
 bench = LLMBenchmark(model_name="llama3.1:8b", n_runs=5)

@@ -80,13 +80,13 @@ Repository = "https://github.com/tensorforge/tensorforge.git"
 "Bug Tracker" = "https://github.com/tensorforge/tensorforge/issues"
 
 [project.scripts]
-tensorforge = "tensorforge.cli:main"
+tensorforge = "cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-tensorforge = ["*.yaml", "*.json", "*.txt"]
+"" = ["*.yaml", "*.json", "*.txt"]
 
 # Black 代码格式化
 [tool.black]

@@ -1,6 +1,6 @@
 import sys
 
-from src.tensorforge.tools.install import main
+from src.tools.install import main
 
 if __name__ == "__main__":
     try:
