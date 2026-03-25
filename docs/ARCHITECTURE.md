@@ -1,288 +1,248 @@
 # TensorForge 架构文档
 
-## 🏗️ 项目架构概览
+面向开发者的深度架构设计文档。
 
-TensorForge 采用模块化架构设计，支持扩展性和可维护性。
+> 👤 **用户快速上手** 请查看 [`README.md`](../README.md)
 
 ## 📁 目录结构
 
 ```
 TensorForge/
-├── src/tensorforge/              # 主包
-│   ├── __init__.py              # 包入口
-│   ├── cli.py                   # 命令行接口
-│   ├── core/                    # 核心模块
-│   │   ├── __init__.py
-│   │   ├── collector.py         # GPU 采样和基准测试基类
-│   │   ├── config_manager.py    # 配置管理
-│   │   ├── error_handler.py     # 错误处理
-│   │   ├── logging_utils.py     # 日志工具
-│   │   ├── model_manager.py     # 模型管理
-│   │   ├── network_optimizer.py # 网络优化
-│   │   └── tf_logger.py         # 日志记录器
-│   ├── benchmarks/              # 基准测试模块
-│   │   ├── __init__.py
-│   │   ├── llm.py              # LLM 基准测试
-│   │   ├── multimodal.py       # 多模态测试
-│   │   └── suite.py            # 测试套件
-│   ├── tools/                   # 工具模块
-│   │   ├── __init__.py
-│   │   └── [各种工具]
-│   └── reporting/               # 报告生成
-│       ├── __init__.py
-│       └── [报告工具]
+├── src/tensorforge/
+│   ├── benchmarks/              # 测试实现
+│   │   ├── llm.py              # LLMBenchmark, LLMContextScaleBenchmark
+│   │   ├── multimodal.py       # MultimodalBenchmark, CrossModalBenchmark  
+│   │   └── suite.py            # ConcurrentStressTest
+│   ├── core/                    # 基础设施
+│   │   ├── collector.py        # GPUSampler, BenchmarkRunner, 数据结构
+│   │   ├── config_manager.py   # BenchmarkConfig, ConfigManager
+│   │   ├── error_handler.py    # ErrorType, ErrorHandler
+│   │   ├── model_manager.py    # 模型下载缓存
+│   │   └── network_optimizer.py # 镜像源切换
+│   ├── reporting/               # HTML报告生成
+│   └── tools/                   # 安装/检查脚本
 ├── examples/                    # 使用示例
-│   └── basic_usage.py
-├── scripts/                     # 脚本工具
-│   └── setup_dev.py
-├── docs/                        # 文档
-│   ├── ARCHITECTURE.md
-│   └── [其他文档]
-├── pyproject.toml              # 项目配置
-├── requirements*.txt           # 依赖文件
-├── config.yaml                 # 配置文件
-└── README.md                   # 项目说明
+├── docs/                        # 本文档
+└── config.yaml                  # 配置文件
 ```
 
-## 🔧 核心组件
+## 🔧 核心组件详解
 
-### 1. GPU 采样器 (GPUSampler)
+### 1. GPUSampler - GPU 采样器
 
-**职责**: 后台持续采样 GPU 状态
+**设计目标**: 后台持续采集 GPU 状态，与测试任务解耦
 
-**特性**:
-- 智能采样频率调整
-- 跨平台 nvidia-smi 支持
-- 内存优化的样本存储
-- 线程安全设计
+**关键特性**:
+- **自适应采样**: 高负载时(>80%)加速采样，低负载时(<20%)降速节省资源
+- **智能降采样**: `smart_sampling()` 保留峰值/谷值，控制内存使用
+- **跨平台支持**: Windows 自动搜索 DriverStore 中的 nvidia-smi
+- **线程安全**: 采样线程与主线程通过锁隔离
 
-**使用流程**:
+**数据流**:
+```
+nvidia-smi → GPUSample → 内存队列 → smart_sampling() → JSON/CSV
+```
+
+### 2. BenchmarkRunner - 测试基类
+
+**设计模式**: Template Method 模式
+
+**生命周期**:
 ```python
-sampler = GPUSampler(interval_s=0.5, adaptive_sampling=True)
-sampler.start()
-# ... 运行测试 ...
-samples = sampler.stop()
+run() -> 预热 -> run_task() [子类实现] -> 停止采样 -> 计算统计 -> 保存结果
 ```
 
-### 2. 基准测试基类 (BenchmarkRunner)
+**输出格式**:
+- JSON: 完整 `BenchmarkResult` (含原始 samples)
+- CSV: `summary.csv` 追加模式，便于批量分析
 
-**职责**: 统一的基准测试接口
+### 3. 配置系统
 
-**特性**:
-- 自动 GPU 统计集成
-- 结果保存和导出
-- 预热和超时管理
-- 错误处理和重试
+**降级策略**: PyYAML 不存在时自动使用 JSON
 
-**继承关系**:
+**配置层级**:
+1. 代码默认值 (BenchmarkConfig 字段)
+2. 配置文件 (config.yaml)
+3. 运行时参数 (构造函数传入)
+
+### 4. 错误处理
+
+**错误分类**:
+- NETWORK: 连接/下载失败 → 重试
+- TIMEOUT: 超时 → 重试
+- SYSTEM: GPU/CUDA 错误 → 不重试
+- CONFIG/MODEL: 配置/模型错误 → 不重试
+
+**重试策略**: 指数退避 + 抖动 (jitter)
 ```
-BenchmarkRunner
-├── LLMBenchmark
-├── DiffusionBenchmark
-├── CVBenchmark
-└── ASRBenchmark
-```
-
-### 3. 配置管理器 (ConfigManager)
-
-**职责**: 统一配置管理
-
-**特性**:
-- YAML/JSON 双格式支持
-- 优雅的依赖降级
-- 默认配置生成
-- 配置验证
-
-## 🎯 基准测试架构
-
-### LLM 基准测试流程
-
-```
-1. 模型检查
-   ├── Ollama 可用性检查
-   ├── 模型存在性验证
-   └── 自动拉取缺失模型
-
-2. 预热阶段
-   ├── GPU 采样器启动
-   ├── 模型加载预热
-   └── 系统稳定等待
-
-3. 推理测试
-   ├── 多轮推理执行
-   ├── 性能指标收集
-   └── GPU 状态监控
-
-4. 结果分析
-   ├── 统计指标计算
-   ├── 性能报告生成
-   └── 结果文件保存
+delay = base_delay * (2 ^ attempt) * random(0.5, 1.0)
 ```
 
-### 性能指标体系
+## 🎯 基准测试设计
 
-**时间指标**:
-- TTFT (Time To First Token)
-- Tokens/s (生成速度)
-- 响应时间
+### LLM 测试
 
-**资源指标**:
-- GPU 利用率
-- 显存使用
-- 功耗
-- 温度
+**LLMBenchmark**:
+- Ollama CLI 调用，解析 JSON 输出
+- TTFT 估算: 基于总时间 × 0.1 (简化模型)
+- Token 估算: `len(response.split())` (简化 tokenizer)
 
-**质量指标**:
-- 成功率
-- 错误率
-- 稳定性
+**LLMContextScaleBenchmark**:
+- 构造不同长度提示词测试性能衰减
+- 基准: 512 tokens，对比 1024/2048/4096
 
-## 🔌 扩展性设计
+### 多模态测试
 
-### 添加新的基准测试
+当前为**模拟实现** (sleep 模拟推理时间):
+- `MultimodalBenchmark`: 并行运行 text/vision/audio
+- `CrossModalBenchmark`: 序列化模态切换，测量切换开销
 
-1. **继承 BenchmarkRunner**:
+### 并发压测
+
+**ConcurrentStressTest**:
+```
+1. 基线测试: 单任务顺序执行获取基准
+2. 并发测试: 多线程 + Barrier 同步启动
+3. 对比分析: 计算吞吐量衰减率和效率比
+```
+
+**关键指标**:
+- `throughput_degradation`: (baseline - concurrent) / baseline
+- `efficiency_ratio`: concurrent / baseline
+- `time_variance`: 任务时间方差（调度公平性）
+
+## 📊 数据模型
+
+### GPUSample
+
 ```python
-class NewBenchmark(BenchmarkRunner):
-    def __init__(self, **kwargs):
-        super().__init__(task_name="new_task", **kwargs)
+@dataclass
+class GPUSample:
+    timestamp: float
+    gpu_util: float          # GPU 利用率 (%)
+    memory_used_mb: float    # 显存使用 (MB)
+    memory_total_mb: float   # 显存总量 (MB)
+    power_w: float          # 功耗 (W)
+    temp_c: float           # 温度 (°C)
+    clock_mhz: float        # 核心频率 (MHz)
+    memory_clock_mhz: float  # 显存频率 (MHz)
+```
+
+### BenchmarkResult
+
+```python
+@dataclass
+class BenchmarkResult:
+    task_name: str
+    model_name: str
+    precision: str
+    status: str              # "ok", "error", "timeout"
+    duration_s: float
+    metrics: Dict[str, Any]   # 业务指标 (子类定义)
+    gpu_stats: Dict[str, Any] # GPU 统计 (基类计算)
+    raw_samples: List[GPUSample]
+    error: Optional[str]
+    timestamp: str
+```
+
+## 🔌 扩展指南
+
+### 添加新基准测试
+
+```python
+# src/tensorforge/benchmarks/my_benchmark.py
+from ..core.collector import BenchmarkRunner
+
+class MyBenchmark(BenchmarkRunner):
+    def __init__(self, my_param: str, **kwargs):
+        super().__init__(task_name="my_task", **kwargs)
+        self.my_param = my_param
     
     def run_task(self) -> dict:
-        # 实现具体的测试逻辑
-        return {"metric": value}
+        # 实现测试逻辑
+        # 返回值会存入 result.metrics
+        return {"score": 100.0}
 ```
 
-2. **注册到包**:
+注册到包:
 ```python
 # src/tensorforge/__init__.py
-from .benchmarks.new_benchmark import NewBenchmark
-__all__ = [..., "NewBenchmark"]
+from .benchmarks.my_benchmark import MyBenchmark
+__all__ = [..., "MyBenchmark"]
 ```
 
-3. **添加 CLI 支持**:
+添加 CLI:
 ```python
 # src/tensorforge/cli.py
-def run_new_benchmark(args):
-    bench = NewBenchmark(**vars(args))
+from .benchmarks.my_benchmark import MyBenchmark
+
+def run_my(args):
+    bench = MyBenchmark(my_param=args.param, **vars(args))
     result = bench.run()
+    print(f"Score: {result.metrics['score']}")
+
+parser = subparsers.add_parser("my", help="我的测试")
+parser.add_argument("--param", required=True)
+parser.set_defaults(func=run_my)
 ```
 
-### 添加新的工具模块
-
-1. **创建模块文件**:
-```python
-# src/tensorforge/tools/new_tool.py
-def new_tool_function():
-    pass
-```
-
-2. **更新 __init__.py**:
-```python
-# src/tensorforge/tools/__init__.py
-from .new_tool import new_tool_function
-```
-
-## 🧪 测试架构
-
-### 测试分层
+## 🧪 测试架构 (计划中)
 
 ```
 tests/
-├── unit/           # 单元测试
-│   ├── test_core.py
-│   ├── test_config.py
-│   └── test_benchmarks.py
-├── integration/    # 集成测试
-│   ├── test_end_to_end.py
-│   └── test_cli.py
-└── performance/    # 性能测试
+├── unit/              # 单元测试 (mock GPU)
+│   ├── test_collector.py
+│   └── test_config.py
+├── integration/       # 集成测试 (需真实 GPU)
+│   └── test_end_to_end.py
+└── performance/       # 性能回归测试
     └── test_scalability.py
 ```
 
-### 测试标记
+标记:
+- `@pytest.mark.gpu`: 需要 GPU
+- `@pytest.mark.slow`: 耗时 >30s
 
-- `@pytest.mark.gpu`: 需要 GPU 的测试
-- `@pytest.mark.slow`: 耗时较长的测试
-- `@pytest.mark.integration`: 集成测试
-
-## 📊 报告系统
-
-### 报告类型
-
-1. **JSON 详细报告**: 完整的原始数据
-2. **CSV 汇总报告**: 便于分析的表格数据
-3. **HTML 可视化报告**: 图表和可视化
-4. **Markdown 总结报告**: 人类友好的总结
-
-### 报告内容
-
-- 测试环境信息
-- 性能指标统计
-- GPU 资源使用情况
-- 错误和异常记录
-- 历史对比分析
-
-## 🔒 错误处理策略
-
-### 错误分类
-
-1. **系统错误**: GPU 驱动、内存不足等
-2. **网络错误**: 模型下载、API 调用等
-3. **模型错误**: 模型加载、推理失败等
-4. **配置错误**: 参数错误、文件缺失等
-
-### 处理策略
-
-- **重试机制**: 网络和临时错误
-- **降级策略**: 模型不可用时的备选方案
-- **用户友好**: 清晰的错误信息和建议
-- **日志记录**: 详细的错误上下文
-
-## 🚀 部署架构
+## � 部署
 
 ### 开发环境
 
 ```bash
-# 安装开发依赖
-pip install -e .[dev]
-
-# 运行测试
-pytest
-
-# 代码格式化
-black src/ tests/
-isort src/ tests/
-
-# 类型检查
-mypy src/
+pip install -e .       # 可编辑安装
+python -m pytest       # 运行测试
+black src/ isort src/  # 代码格式化
 ```
 
-### 生产环境
+### Python API 使用
 
-```bash
-# 安装运行时依赖
-pip install tensorforge[ml]
+```python
+from tensorforge import LLMBenchmark, GPUSampler
 
-# 运行基准测试
-tensorforge llm --model llama3.1:8b
+# 完整测试
+bench = LLMBenchmark(model_name="llama3.1:8b", n_runs=5)
+result = bench.run()
 
-# GPU 监控
-tensorforge monitor --duration 300
+# 仅监控 GPU
+sampler = GPUSampler(interval_s=1.0)
+sampler.start()
+# ... 自定义代码 ...
+samples = sampler.stop()
+stats = sampler.get_stats()
 ```
 
-## 🔮 未来扩展
+## 🔮 演进路线
 
-### 计划中的功能
+### 短期
+1. **真实模型推理**: 替换 sleep 模拟
+   - Diffusers (Stable Diffusion)
+   - Ultralytics (YOLO)
+   - Faster-Whisper (ASR)
 
-1. **分布式测试**: 多 GPU、多节点支持
-2. **云端集成**: AWS、Azure、GCP 支持
-3. **自动化 CI/CD**: 持续性能测试
-4. **Web 界面**: 图形化测试管理
-5. **数据库后端**: 大规模结果存储
+### 中期
+2. **异步架构**: asyncio 替代 threading
+3. **多 GPU 支持**: 并行测试多个设备
 
-### 技术演进
-
-- **异步架构**: 提升并发性能
-- **微服务化**: 组件解耦
-- **容器化**: Docker/Kubernetes 支持
-- **监控集成**: Prometheus/Grafana 集成
+### 长期
+4. **分布式测试**: 多节点集群支持
+5. **数据库后端**: 历史数据持久化
+6. **Web UI**: 可视化测试管理
