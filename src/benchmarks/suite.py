@@ -244,29 +244,37 @@ class ConcurrentStressTest:
             
             # 衰减率
             if task_type in baselines:
-                degradation = (baseline_throughput - concurrent_throughput) / baseline_throughput
-                analysis["throughput_degradation"][task_type] = max(0, degradation)
+                if baseline_throughput > 0:
+                    degradation = (baseline_throughput - concurrent_throughput) / baseline_throughput
+                    analysis["throughput_degradation"][task_type] = max(0, degradation)
+                else:
+                    analysis["throughput_degradation"][task_type] = 0.0
             
             # 效率比
             if task_type in baselines:
-                efficiency = concurrent_throughput / baseline_throughput
-                analysis["efficiency_ratio"][task_type] = efficiency
+                if baseline_throughput > 0:
+                    efficiency = concurrent_throughput / baseline_throughput
+                    analysis["efficiency_ratio"][task_type] = efficiency
+                else:
+                    analysis["efficiency_ratio"][task_type] = 0.0
         
         return analysis
     
     def _calculate_throughput(self, metrics: Dict[str, Any]) -> float:
         """计算吞吐量"""
-        if metrics.get("status") != "success":
+        payload = metrics.get("metrics", metrics)
+
+        if payload.get("status") != "success":
             return 0.0
-        
-        task_type = metrics.get("task_type", "")
+
+        task_type = metrics.get("task_type", payload.get("task_type", ""))
         
         if task_type == "llm":
-            return metrics.get("tokens_per_s", 0.0)
+            return float(payload.get("tokens_per_s", 0.0))
         elif task_type == "diffusion":
-            return metrics.get("images_per_s", 0.0)
+            return float(payload.get("images_per_s", 0.0))
         elif task_type == "cv":
-            return metrics.get("fps", 0.0)
+            return float(payload.get("fps", 0.0))
         else:
             return 0.0
     
