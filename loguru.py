@@ -2,6 +2,7 @@
 Minimal local loguru-compatible logger used when the third-party package
 is unavailable in the execution environment.
 """
+
 from __future__ import annotations
 
 import sys
@@ -10,7 +11,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TextIO
-
 
 LEVELS = {
     "DEBUG": 10,

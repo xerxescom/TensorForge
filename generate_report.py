@@ -3,10 +3,11 @@
 将 final_report.json 渲染为独立 HTML 报告
 用法: python report/generate_report.py results/final_report.json
 """
+
 import json
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 
 def load_report(path: str) -> dict:
@@ -38,13 +39,13 @@ def build_chart_data(report: dict) -> dict:
                 return p.get("result", {})
         return {}
 
-    llm_q4    = phase_result("llm")
-    llm_fp16  = phase_result("llm_fp16")
+    llm_q4 = phase_result("llm")
+    llm_fp16 = phase_result("llm_fp16")
     diffusion = phase_result("diffusion")
-    cv        = phase_result("cv")
-    asr       = phase_result("asr")
+    cv = phase_result("cv")
+    asr = phase_result("asr")
     ctx_scale = phase_result("llm_context_scale")
-    concurrent= phase_result("concurrent")
+    concurrent = phase_result("concurrent")
 
     def m(d, *keys, default=0):
         v = d
@@ -59,42 +60,42 @@ def build_chart_data(report: dict) -> dict:
     throughput = {
         "labels": ["LLM Q4 (tok/s)", "LLM FP16 (tok/s)", "Diffusion (it/s)", "CV (FPS)"],
         "values": [
-            m(llm_q4,   "metrics", "tokens_per_s_mean"),
+            m(llm_q4, "metrics", "tokens_per_s_mean"),
             m(llm_fp16, "metrics", "tokens_per_s_mean"),
-            m(diffusion,"metrics", "it_per_s"),
-            m(cv,       "metrics", "fps"),
-        ]
+            m(diffusion, "metrics", "it_per_s"),
+            m(cv, "metrics", "fps"),
+        ],
     }
 
     # 功耗
     power = {
         "labels": ["LLM Q4", "LLM FP16", "Diffusion", "CV", "ASR"],
-        "mean":   [
-            m(llm_q4,   "gpu_stats", "power_w", "mean"),
+        "mean": [
+            m(llm_q4, "gpu_stats", "power_w", "mean"),
             m(llm_fp16, "gpu_stats", "power_w", "mean"),
-            m(diffusion,"gpu_stats", "power_w", "mean"),
-            m(cv,       "gpu_stats", "power_w", "mean"),
-            m(asr,      "gpu_stats", "power_w", "mean"),
+            m(diffusion, "gpu_stats", "power_w", "mean"),
+            m(cv, "gpu_stats", "power_w", "mean"),
+            m(asr, "gpu_stats", "power_w", "mean"),
         ],
         "max": [
-            m(llm_q4,   "gpu_stats", "power_w", "max"),
+            m(llm_q4, "gpu_stats", "power_w", "max"),
             m(llm_fp16, "gpu_stats", "power_w", "max"),
-            m(diffusion,"gpu_stats", "power_w", "max"),
-            m(cv,       "gpu_stats", "power_w", "max"),
-            m(asr,      "gpu_stats", "power_w", "max"),
-        ]
+            m(diffusion, "gpu_stats", "power_w", "max"),
+            m(cv, "gpu_stats", "power_w", "max"),
+            m(asr, "gpu_stats", "power_w", "max"),
+        ],
     }
 
     # 温度
     temp = {
         "labels": power["labels"],
         "max": [
-            m(llm_q4,   "gpu_stats", "temp_c", "max"),
+            m(llm_q4, "gpu_stats", "temp_c", "max"),
             m(llm_fp16, "gpu_stats", "temp_c", "max"),
-            m(diffusion,"gpu_stats", "temp_c", "max"),
-            m(cv,       "gpu_stats", "temp_c", "max"),
-            m(asr,      "gpu_stats", "temp_c", "max"),
-        ]
+            m(diffusion, "gpu_stats", "temp_c", "max"),
+            m(cv, "gpu_stats", "temp_c", "max"),
+            m(asr, "gpu_stats", "temp_c", "max"),
+        ],
     }
 
     # 上下文长度衰减
@@ -104,10 +105,10 @@ def build_chart_data(report: dict) -> dict:
     efficiency = {
         "labels": ["LLM Q4", "LLM FP16", "Diffusion"],
         "values": [
-            m(llm_q4,   "metrics", "tokens_per_joule"),
+            m(llm_q4, "metrics", "tokens_per_joule"),
             m(llm_fp16, "metrics", "tokens_per_joule"),
-            m(diffusion,"metrics", "steps_per_joule"),
-        ]
+            m(diffusion, "metrics", "steps_per_joule"),
+        ],
     }
 
     # 并发衰减
@@ -125,11 +126,11 @@ def build_chart_data(report: dict) -> dict:
         "labels": ["LLM 速度", "图像速度", "CV 速度", "功耗效率", "低延迟"],
         "values": [
             score(tok_s, 150),
-            score(m(diffusion,"metrics","it_per_s"), 10),
-            score(m(cv,"metrics","fps"), 500),
-            score(m(llm_q4,"metrics","tokens_per_joule"), 1),
-            score(m(llm_q4,"metrics","ttft_s_min"), 2.0, invert=True),
-        ]
+            score(m(diffusion, "metrics", "it_per_s"), 10),
+            score(m(cv, "metrics", "fps"), 500),
+            score(m(llm_q4, "metrics", "tokens_per_joule"), 1),
+            score(m(llm_q4, "metrics", "ttft_s_min"), 2.0, invert=True),
+        ],
     }
 
     return {

@@ -4,9 +4,11 @@ from datetime import datetime
 
 EXCLUDE_DIRS = {".idea", ".git", "__pycache__"}
 
+
 def should_exclude(path):
     parts = set(path.split(os.sep))
     return not EXCLUDE_DIRS.isdisjoint(parts)
+
 
 def make_tar(source_dir):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

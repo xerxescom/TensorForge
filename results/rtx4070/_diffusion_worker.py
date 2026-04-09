@@ -1,6 +1,10 @@
 
-import torch, time, json, sys, os
-from pathlib import Path
+import json
+import os
+import sys
+import time
+
+import torch
 
 # 设置环境变量优化下载
 os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
@@ -10,18 +14,19 @@ os.environ['HF_HOME'] = 'models_cache'
 
 # 网络配置
 import urllib3
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 try:
     from diffusers import AutoPipelineForText2Image
     from huggingface_hub import hf_hub_download, snapshot_download
-    
+
     print("[worker] Loading diffusion model...")
-    
+
     # 尝试加载本地模型
     try:
         pipe = AutoPipelineForText2Image.from_pretrained(
-            "models_cache\stabilityai_sdxl-turbo",
+            r"models_cache\stabilityai_sdxl-turbo",
             torch_dtype=torch.float16,
             variant="fp16",
             local_files_only=True if 'models_cache\\stabilityai_sdxl-turbo' else False,
@@ -32,15 +37,15 @@ try:
     except Exception as e:
         print(f"[worker] Local model load failed: {e}")
         print("[worker] Trying online download...")
-        
+
         pipe = AutoPipelineForText2Image.from_pretrained(
-            "models_cache\stabilityai_sdxl-turbo",
+            r"models_cache\stabilityai_sdxl-turbo",
             torch_dtype=torch.float16,
             variant="fp16",
             resume_download=True,
             timeout=600,
         )
-    
+
     pipe = pipe.to("cuda")
     print("[worker] Model moved to GPU")
 
@@ -66,7 +71,7 @@ success_count = 0
 for i in range(n):
     prompt = prompts[i % len(prompts)]
     t0 = time.perf_counter()
-    
+
     try:
         image = pipe(prompt=prompt, num_inference_steps=steps, generator=generator).images[0]
         elapsed = time.perf_counter() - t0

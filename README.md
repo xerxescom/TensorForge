@@ -372,7 +372,7 @@ sudo nvidia-smi --reset-gpu-clocks
 
 #### 1. 安装问题
 ```bash
-# 检查 Python 版本（需要 3.8+）
+# 检查 Python 版本（需要 3.12+）
 python --version
 
 # 检查 pip 版本
@@ -502,20 +502,36 @@ cd TensorForge
 
 # 安装开发依赖
 pip install -r requirements-dev.txt
-pip install -e .
 
 # 运行测试
 python test_models.py
 python check_deps.py
 
+# 代码质量检查（lint）
+ruff check .
+
 # 代码格式化
-black .
+ruff format .
 
 # 类型检查
 mypy .
 
 # 运行测试套件
 pytest
+```
+
+### 常用开发命令（推荐）
+
+```bash
+# 一次性跑完：lint + format-check + type-check + tests
+ruff check . && ruff format --check . && mypy && pytest
+```
+
+### 可选：启用 pre-commit
+
+```bash
+pip install -r requirements-dev.txt
+pre-commit install
 ```
 
 ### 代码结构
@@ -539,11 +555,18 @@ pytest
 
 ### 代码规范
 
-- 使用 Black 进行代码格式化
-- 使用 flake8 进行代码检查
+- 使用 Ruff 进行代码检查与格式化
 - 使用 mypy 进行类型检查
 - 添加适当的文档字符串
 - 遵循 PEP 8 编码规范
+
+### CLI 配置覆盖（可复现实验）
+
+`run_suite.py` 支持从指定配置文件加载，并用命令行覆盖部分字段；最终解析结果会写入输出目录的 `config_resolved.json`。
+
+```bash
+python run_suite.py --config config.yaml --set sample_interval_s=0.25 --set network_timeout=600
+```
 
 ---
 

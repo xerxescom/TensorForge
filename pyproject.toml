@@ -1,0 +1,61 @@
+[project]
+name = "tensorforge"
+version = "0.0.0"
+description = "GPU AI Benchmark Suite (LLM/Diffusion/CV/ASR) with GPU sampling and reporting."
+requires-python = ">=3.12"
+readme = "README.md"
+license = { text = "MIT" }
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+fix = true
+show-fixes = true
+exclude = [
+  "results/**",
+  "sorting_algorithms.py",
+]
+
+[tool.ruff.lint]
+select = [
+  "E", "F", "I", "W",
+  "B",
+  "UP",
+  "SIM",
+  "RUF",
+]
+ignore = [
+  "E501", # allow long lines; formatter will handle wrapping where desired
+  "RUF001", # allow non-ASCII punctuation in strings
+  "RUF002", # allow non-ASCII punctuation in docstrings
+  "RUF003", # allow non-ASCII punctuation in comments
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = false
+no_implicit_optional = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+files = ["tensorforge", "tests"]
+disable_error_code = ["import-untyped", "no-any-return"]
+exclude = [
+  "^results/",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+

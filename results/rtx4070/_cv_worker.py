@@ -1,5 +1,8 @@
 
-import torch, time, json, numpy as np
+import json
+import time
+
+import torch
 from ultralytics import YOLO
 
 model = YOLO("yolov8n.pt")

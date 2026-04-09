@@ -1,5 +1,8 @@
 
-import time, json, numpy as np
+import json
+import time
+
+import numpy as np
 from faster_whisper import WhisperModel
 
 model = WhisperModel("base", device="cuda",

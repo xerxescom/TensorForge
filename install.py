@@ -3,9 +3,10 @@
 TensorForge 智能安装脚本
 自动检测系统环境并安装合适的依赖
 """
+
+import platform
 import subprocess
 import sys
-import platform
 from pathlib import Path
 
 
@@ -25,6 +26,7 @@ def check_cuda():
     """检查 CUDA 版本"""
     try:
         import torch
+
         if torch.cuda.is_available():
             cuda_version = torch.version.cuda
             print(f"✅ CUDA {cuda_version} available")
@@ -37,18 +39,18 @@ def check_cuda():
         # 尝试从 nvidia-smi 检测
         try:
             result = subprocess.run(
-                ["nvidia-smi"], 
-                capture_output=True, 
-                text=True, 
+                ["nvidia-smi"],
+                capture_output=True,
+                text=True,
                 timeout=10,
                 encoding="utf-8",
             )
             if result.returncode == 0:
                 # 解析 CUDA 版本
-                lines = result.stdout.split('\n')
+                lines = result.stdout.split("\n")
                 for line in lines:
-                    if 'CUDA Version:' in line:
-                        cuda_version = line.split('CUDA Version:')[1].strip().split()[0]
+                    if "CUDA Version:" in line:
+                        cuda_version = line.split("CUDA Version:")[1].strip().split()[0]
                         print(f"✅ System CUDA {cuda_version} detected")
                         return cuda_version
             return None
@@ -59,34 +61,42 @@ def check_cuda():
 def install_pytorch(cuda_version=None):
     """安装 PyTorch"""
     print("\n🚀 Installing PyTorch...")
-    
+
     if cuda_version:
         # 选择合适的 CUDA 版本
-        if cuda_version.startswith('12.'):
+        if cuda_version.startswith("12."):
             index_url = "https://download.pytorch.org/whl/cu121"
-        elif cuda_version.startswith('11.8'):
+        elif cuda_version.startswith("11.8"):
             index_url = "https://download.pytorch.org/whl/cu118"
-        elif cuda_version.startswith('11.7'):
+        elif cuda_version.startswith("11.7"):
             index_url = "https://download.pytorch.org/whl/cu117"
         else:
             # 默认使用 CUDA 11.8
             index_url = "https://download.pytorch.org/whl/cu118"
-        
+
         cmd = [
-            sys.executable, "-m", "pip", "install", 
-            "torch", "torchvision", 
-            f"--index-url={index_url}"
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "torch",
+            "torchvision",
+            f"--index-url={index_url}",
         ]
         print(f"Using CUDA index: {index_url}")
     else:
         # CPU 版本
         cmd = [
-            sys.executable, "-m", "pip", "install", 
-            "torch", "torchvision", 
-            "--index-url=https://download.pytorch.org/whl/cpu"
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "torch",
+            "torchvision",
+            "--index-url=https://download.pytorch.org/whl/cpu",
         ]
         print("Using CPU version")
-    
+
     try:
         subprocess.check_call(cmd)
         print("✅ PyTorch installed successfully")
@@ -99,13 +109,13 @@ def install_pytorch(cuda_version=None):
 def install_requirements():
     """安装其他依赖"""
     print("\n📦 Installing other dependencies...")
-    
+
     requirements_file = Path(__file__).parent / "requirements.txt"
-    
+
     try:
-        subprocess.check_call([
-            sys.executable, "-m", "pip", "install", "-r", str(requirements_file)
-        ])
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "-r", str(requirements_file)]
+        )
         print("✅ All dependencies installed successfully")
         return True
     except subprocess.CalledProcessError as e:
@@ -117,9 +127,9 @@ def check_ollama():
     """检查 Ollama"""
     try:
         result = subprocess.run(
-            ["ollama", "version"], 
-            capture_output=True, 
-            text=True, 
+            ["ollama", "version"],
+            capture_output=True,
+            text=True,
             timeout=10,
             encoding="utf-8",
         )
@@ -139,9 +149,9 @@ def check_nvidia_smi():
     """检查 nvidia-smi"""
     try:
         result = subprocess.run(
-            ["nvidia-smi", "--version"], 
-            capture_output=True, 
-            text=True, 
+            ["nvidia-smi", "--version"],
+            capture_output=True,
+            text=True,
             timeout=10,
             encoding="utf-8",
         )
@@ -160,57 +170,61 @@ def main():
     """主安装函数"""
     print("🔧 TensorForge Installation Script")
     print("=" * 50)
-    
+
     # 检查 Python 版本
     if not check_python_version():
         sys.exit(1)
-    
+
     # 检查系统信息
     print(f"\n🖥️  System: {platform.system()} {platform.release()}")
     print(f"🐍 Python: {sys.version}")
-    
+
     # 检查 CUDA
     cuda_version = check_cuda()
-    
+
     # 安装 PyTorch
     if not install_pytorch(cuda_version):
         print("❌ Failed to install PyTorch")
         sys.exit(1)
-    
+
     # 安装其他依赖
     if not install_requirements():
         print("❌ Failed to install dependencies")
         sys.exit(1)
-    
+
     # 检查系统工具
     print("\n🔍 Checking system tools...")
     nvidia_ok = check_nvidia_smi()
     ollama_ok = check_ollama()
-    
+
     # 总结
     print("\n" + "=" * 50)
     print("📋 Installation Summary:")
-    print(f"✅ PyTorch: Installed")
-    print(f"✅ Dependencies: Installed")
-    print(f"{'✅' if nvidia_ok else '❌'} nvidia-smi: {'Available' if nvidia_ok else 'Not available'}")
-    print(f"{'✅' if ollama_ok else '⚠️'} Ollama: {'Available' if ollama_ok else 'Not available (optional)'}")
-    
+    print("✅ PyTorch: Installed")
+    print("✅ Dependencies: Installed")
+    print(
+        f"{'✅' if nvidia_ok else '❌'} nvidia-smi: {'Available' if nvidia_ok else 'Not available'}"
+    )
+    print(
+        f"{'✅' if ollama_ok else '⚠️'} Ollama: {'Available' if ollama_ok else 'Not available (optional)'}"
+    )
+
     if not nvidia_ok:
         print("\n⚠️  Warning: nvidia-smi not available")
         print("   GPU monitoring will not work")
         print("   Please install NVIDIA drivers")
-    
+
     if not ollama_ok:
         print("\n⚠️  Ollama not available (optional)")
         print("   LLM benchmarks will be skipped")
         print("   Install from: https://ollama.com/download")
-    
+
     print("\n🎉 Installation completed!")
     print("\nNext steps:")
     print("1. Run dependency check: python check_deps.py")
     print("2. Test model download: python test_models.py")
     print("3. Run benchmark: python run_suite.py")
-    
+
     return True
 
 

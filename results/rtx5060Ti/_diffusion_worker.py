@@ -1,5 +1,8 @@
 
-import torch, time, json
+import json
+import time
+
+import torch
 from diffusers import AutoPipelineForText2Image
 
 pipe = AutoPipelineForText2Image.from_pretrained(
