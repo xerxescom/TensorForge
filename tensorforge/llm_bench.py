@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import ClassVar
@@ -135,25 +136,38 @@ class LLMBenchmark(BenchmarkRunner):
                 bufsize=1,
                 **_subprocess_kwargs(),
             )
-            first_chunk = ""
-            while True:
-                ch = proc.stdout.read(1) if proc.stdout else ""
-                if ch:
-                    first_chunk = ch
-                    ttft_s = round(time.perf_counter() - t_start, 4)
-                    break
-                if proc.poll() is not None:
-                    break
+            output_chunks: list[str] = []
+            first_output_ts: float | None = None
+
+            def _read_stdout_chunks():
+                nonlocal first_output_ts
+                if not proc.stdout:
+                    return
+                while True:
+                    chunk = proc.stdout.read(256)
+                    if not chunk:
+                        break
+                    if first_output_ts is None and chunk.strip():
+                        first_output_ts = time.perf_counter()
+                    output_chunks.append(chunk)
+
+            reader = threading.Thread(target=_read_stdout_chunks, daemon=True)
+            reader.start()
 
             try:
-                remaining_out, remaining_err = proc.communicate(timeout=120)
+                proc.wait(timeout=120)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                remaining_out, remaining_err = proc.communicate()
+                proc.wait()
                 raise
+            finally:
+                reader.join(timeout=2)
 
-            output_text = first_chunk + (remaining_out or "")
+            remaining_err = proc.stderr.read() if proc.stderr else ""
+            output_text = "".join(output_chunks)
             total_elapsed_s = round(time.perf_counter() - t_start, 4)
+            if first_output_ts is not None:
+                ttft_s = round(first_output_ts - t_start, 4)
 
             if ttft_s == 0 and output_text:
                 ttft_s = total_elapsed_s
