@@ -22,6 +22,8 @@ from .tf_logger import logger
 
 
 class ConcurrentStressTest:
+    """Run multiple workload types concurrently and compare against single-task baselines."""
+
     def __init__(self, tasks: list[dict], output_dir: str = "results", gpu_index: int = 0):
         self.tasks = tasks
         self.output_dir = Path(output_dir)
@@ -31,8 +33,10 @@ class ConcurrentStressTest:
     def run(self) -> dict:
         logger.info(f"[Concurrent] Starting {len(self.tasks)} tasks simultaneously ...")
         sampler = GPUSampler(interval_s=0.5, gpu_index=self.gpu_index)
+        # Phase 1: establish baseline throughput for each task type/model pair.
         baselines = self._run_baselines()
 
+        # Phase 2: run all tasks under contention and collect shared GPU telemetry.
         sampler.start()
         t0 = time.time()
         threads: list[threading.Thread] = []
@@ -55,6 +59,7 @@ class ConcurrentStressTest:
         samples = sampler.stop()
         gpu_stats = GPUSampler.summarize(samples)
 
+        # Phase 3: compute degradation ratios for comparable metrics.
         degradation: dict[str, float | None] = {}
         for cfg, conc in zip(self.tasks, concurrent_metrics, strict=True):
             if conc is None:
@@ -188,6 +193,8 @@ print(json.dumps({{
 
 
 class FullBenchmarkSuite:
+    """Orchestrate the full benchmark workflow and persist a final aggregate report."""
+
     def __init__(
         self,
         output_dir: str = "results",
