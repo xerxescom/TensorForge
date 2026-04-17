@@ -24,6 +24,7 @@ class BenchmarkConfig:
     timeout_s: int = 120
     max_raw_samples: int = 1000
     adaptive_sampling: bool = True
+    stats_precision_mode: str = "exact"
 
     cache_base_dir: str = "models_cache"
     cache_max_size_gb: float = 50.0
@@ -163,6 +164,7 @@ class ConfigManager:
             timeout_s=default_settings.get("timeout_s", 120),
             max_raw_samples=default_settings.get("max_raw_samples", 1000),
             adaptive_sampling=default_settings.get("adaptive_sampling", True),
+            stats_precision_mode=default_settings.get("stats_precision_mode", "exact"),
             cache_base_dir=cache.get("base_dir", "models_cache"),
             cache_max_size_gb=cache.get("max_size_gb", 50.0),
             cache_cleanup_old_models=cache.get("cleanup_old_models", True),

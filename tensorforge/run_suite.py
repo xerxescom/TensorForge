@@ -31,6 +31,7 @@ class ConcurrentStressTest:
         output_dir: str = "results",
         gpu_index: int = 0,
         measurement_mode: str = "cold_start",
+        stats_precision_mode: str = "exact",
     ):
         self.tasks = tasks
         self.output_dir = Path(output_dir)
@@ -38,6 +39,9 @@ class ConcurrentStressTest:
         self.gpu_index = gpu_index
         self.measurement_mode = (
             measurement_mode if measurement_mode in {"cold_start", "steady_state"} else "cold_start"
+        )
+        self.stats_precision_mode = (
+            stats_precision_mode if stats_precision_mode in {"exact", "approximate"} else "exact"
         )
 
     def run(self) -> dict:
@@ -67,7 +71,10 @@ class ConcurrentStressTest:
 
         elapsed = time.time() - t0
         samples = sampler.stop()
-        gpu_stats = GPUSampler.summarize(samples)
+        gpu_stats = GPUSampler.summarize(
+            samples,
+            stats_precision_mode=self.stats_precision_mode,
+        )
 
         # Phase 3: compute degradation ratios for comparable metrics.
         degradation: dict[str, float | None] = {}
@@ -93,6 +100,7 @@ class ConcurrentStressTest:
         result = {
             "test_type": "concurrent_stress",
             "measurement_mode": self.measurement_mode,
+            "stats_precision_mode": self.stats_precision_mode,
             "n_tasks": len(self.tasks),
             "total_elapsed_s": round(elapsed, 3),
             "gpu_stats": gpu_stats,
@@ -343,6 +351,7 @@ class FullBenchmarkSuite:
             warmup_s=self.config.warmup_s,
             adaptive_sampling=self.config.adaptive_sampling,
             max_raw_samples=self.config.max_raw_samples,
+            stats_precision_mode=self.config.stats_precision_mode,
         )
 
         phases = {
@@ -404,6 +413,7 @@ class FullBenchmarkSuite:
                 output_dir=str(self.output_dir),
                 gpu_index=self.gpu_index,
                 measurement_mode=self.config.concurrent_measurement_mode,
+                stats_precision_mode=self.config.stats_precision_mode,
             ).run(),
         }
 
