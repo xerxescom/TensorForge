@@ -390,6 +390,7 @@ class FullBenchmarkSuite:
                 precision=self.config.cv_precision,
                 n_frames=self.config.cv_n_frames,
                 image_size=self.config.cv_image_size,
+                batch_size=self.config.cv_batch_size,
                 **common,
             ).run(),
             "asr": lambda: ASRBenchmark(
