@@ -66,3 +66,28 @@ def test_enforce_cache_prefers_metadata_and_fallback_scan(tmp_path):
 
     refreshed = json.loads(d.metadata_path.read_text(encoding="utf-8"))
     assert refreshed["new_model"]["size_bytes"] > 0
+
+
+def test_update_model_metadata_supports_source_and_increment(tmp_path):
+    d = ModelDownloader(cache_dir=str(tmp_path))
+    key = "demo_model"
+    d._update_model_metadata(key, size_delta=100, source="mirror_a")
+    d._update_model_metadata(key, size_delta=50, source="mirror_b")
+    d._save_cache_metadata()
+
+    payload = json.loads(d.metadata_path.read_text(encoding="utf-8"))
+    assert payload[key]["size_bytes"] == 150
+    assert payload[key]["source"] == "mirror_b"
+    assert payload[key]["last_access_ts"] > 0
+
+
+def test_full_scan_fallback_rebuilds_metadata(tmp_path):
+    d = ModelDownloader(cache_dir=str(tmp_path))
+    _write_bytes(tmp_path / "model_x" / "file.bin", 64)
+    _write_bytes(tmp_path / "model_y" / "file.bin", 32)
+
+    d._fallback_full_scan_rebuild_metadata()
+    payload = json.loads(d.metadata_path.read_text(encoding="utf-8"))
+    assert payload["model_x"]["size_bytes"] >= 64
+    assert payload["model_y"]["size_bytes"] >= 32
+    assert payload["model_x"]["source"] == "scan_fallback"
