@@ -17,6 +17,7 @@ def test_load_config_from_yaml(tmp_path):
               warmup_s: 1.5
               max_raw_samples: 123
               adaptive_sampling: false
+              stats_precision_mode: approximate
             network:
               timeout: 10
               max_retries: 2
@@ -49,6 +50,7 @@ def test_load_config_from_yaml(tmp_path):
     assert cfg.warmup_s == 1.5
     assert cfg.max_raw_samples == 123
     assert cfg.adaptive_sampling is False
+    assert cfg.stats_precision_mode == "approximate"
     assert cfg.network_timeout == 10
     assert cfg.cache_base_dir == "x_cache"
     assert cfg.concurrent_duration_s == 7
@@ -63,11 +65,13 @@ def test_apply_overrides_type_coercion():
             "sample_interval_s": "0.1",
             "network_timeout": "600",
             "adaptive_sampling": "false",
+            "stats_precision_mode": "approximate",
         },
     )
     assert cfg.sample_interval_s == pytest.approx(0.1)
     assert cfg.network_timeout == 600
     assert cfg.adaptive_sampling is False
+    assert cfg.stats_precision_mode == "approximate"
 
 
 def test_apply_overrides_supports_json_list():
@@ -94,3 +98,9 @@ def test_apply_overrides_optional_int_validation_error():
     cfg = BenchmarkConfig()
     with pytest.raises(ValueError, match="network_proxy_port"):
         apply_overrides(cfg, {"network_proxy_port": "not-int"})
+
+
+def test_apply_overrides_critical_field_validation_error():
+    cfg = BenchmarkConfig()
+    with pytest.raises(ValueError, match="stats_precision_mode"):
+        apply_overrides(cfg, {"stats_precision_mode": "fast"})

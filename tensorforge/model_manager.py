@@ -79,13 +79,29 @@ class ModelDownloader:
     def _model_cache_key(model_id: str) -> str:
         return model_id.replace("/", "_")
 
-    def _update_model_metadata(self, model_key: str, *, size_bytes: int | None = None):
+    def _update_model_metadata(
+        self,
+        model_key: str,
+        *,
+        size_bytes: int | None = None,
+        size_delta: int | None = None,
+        source: str | None = None,
+        verified: bool = False,
+    ):
         now = time.time()
         entry = self._cache_metadata.get(model_key, {})
         if size_bytes is not None:
             entry["size_bytes"] = int(max(size_bytes, 0))
             entry["last_size_update_ts"] = now
+        elif size_delta is not None:
+            base = int(entry.get("size_bytes", 0) or 0)
+            entry["size_bytes"] = max(base + int(size_delta), 0)
+            entry["last_size_update_ts"] = now
+        if source:
+            entry["source"] = source
         entry["last_access_ts"] = now
+        if verified:
+            entry["last_verified_ts"] = now
         self._cache_metadata[model_key] = entry
 
     def _remove_model_metadata(self, model_key: str):
@@ -110,26 +126,48 @@ class ModelDownloader:
     def _dir_size_bytes(self, path: Path) -> int:
         return sum(p.stat().st_size for p in path.rglob("*") if p.is_file())
 
+    def _full_scan_cache_dirs(self) -> list[Path]:
+        return [p for p in self.cache_dir.iterdir() if p.is_dir()]
+
+    def _fallback_full_scan_rebuild_metadata(self):
+        logger.warning("[cache] Falling back to full cache scan for metadata rebuild")
+        rebuilt: dict[str, dict] = {}
+        for model_dir in self._full_scan_cache_dirs():
+            size_bytes = self._dir_size_bytes(model_dir)
+            stat = model_dir.stat()
+            rebuilt[model_dir.name] = {
+                "size_bytes": int(size_bytes),
+                "last_access_ts": float(stat.st_mtime),
+                "last_size_update_ts": time.time(),
+                "last_verified_ts": time.time(),
+                "source": "scan_fallback",
+            }
+        with self._metadata_lock:
+            self._cache_metadata = rebuilt
+        self._save_cache_metadata()
+
     def _cleanup_expired_cache(self):
         if not self.cleanup_old_models:
             return
-        now = time.time()
-        retention_seconds = self.model_retention_days * 24 * 60 * 60
-        changed = False
-        for model_dir in self.cache_dir.iterdir():
-            if not model_dir.is_dir():
-                continue
-            entry = self._cache_metadata.get(model_dir.name, {})
-            last_access_ts = entry.get("last_access_ts", model_dir.stat().st_mtime)
-            age_seconds = now - last_access_ts
-            if age_seconds > retention_seconds:
-                shutil.rmtree(model_dir, ignore_errors=True)
-                with self._metadata_lock:
-                    self._remove_model_metadata(model_dir.name)
-                changed = True
-                logger.info(f"[cache] Removed expired cache directory: {model_dir.name}")
-        if changed:
-            self._save_cache_metadata()
+        try:
+            now = time.time()
+            retention_seconds = self.model_retention_days * 24 * 60 * 60
+            changed = False
+            for model_dir in self._full_scan_cache_dirs():
+                entry = self._cache_metadata.get(model_dir.name, {})
+                last_access_ts = entry.get("last_access_ts", model_dir.stat().st_mtime)
+                age_seconds = now - last_access_ts
+                if age_seconds > retention_seconds:
+                    shutil.rmtree(model_dir, ignore_errors=True)
+                    with self._metadata_lock:
+                        self._remove_model_metadata(model_dir.name)
+                    changed = True
+                    logger.info(f"[cache] Removed expired cache directory: {model_dir.name}")
+            if changed:
+                self._save_cache_metadata()
+        except Exception as e:
+            logger.warning(f"[cache] Expiration cleanup failed, fallback to full scan: {e}")
+            self._fallback_full_scan_rebuild_metadata()
 
     def _size_from_metadata_or_scan(self, model_dir: Path) -> tuple[int, bool]:
         entry = self._cache_metadata.get(model_dir.name, {})
@@ -144,56 +182,65 @@ class ModelDownloader:
     def _enforce_cache_size_limit(self):
         if self.max_cache_size_bytes <= 0:
             return
-        model_dirs = [p for p in self.cache_dir.iterdir() if p.is_dir()]
-        total_size = 0
-        measured_any = False
-        dir_sizes: dict[str, int] = {}
-        for model_dir in model_dirs:
-            size_bytes, measured = self._size_from_metadata_or_scan(model_dir)
-            dir_sizes[model_dir.name] = size_bytes
-            total_size += size_bytes
-            measured_any = measured_any or measured
-        if total_size <= self.max_cache_size_bytes:
-            if measured_any:
-                self._save_cache_metadata()
-            return
-        changed = measured_any
-
-        def _sort_key(p: Path) -> float:
-            entry = self._cache_metadata.get(p.name, {})
-            ts = entry.get("last_access_ts")
-            if isinstance(ts, (int, float)):
-                return float(ts)
-            return p.stat().st_mtime
-
-        for model_dir in sorted(model_dirs, key=_sort_key):
+        try:
+            model_dirs = self._full_scan_cache_dirs()
+            total_size = 0
+            measured_any = False
+            dir_sizes: dict[str, int] = {}
+            for model_dir in model_dirs:
+                size_bytes, measured = self._size_from_metadata_or_scan(model_dir)
+                dir_sizes[model_dir.name] = size_bytes
+                total_size += size_bytes
+                measured_any = measured_any or measured
             if total_size <= self.max_cache_size_bytes:
-                break
-            # Prefer metadata size; fallback to realtime scan for correction when absent.
-            dir_size = dir_sizes.get(model_dir.name)
-            if dir_size is None:
-                dir_size = self._dir_size_bytes(model_dir)
-                changed = True
-            shutil.rmtree(model_dir, ignore_errors=True)
-            with self._metadata_lock:
-                self._remove_model_metadata(model_dir.name)
-            total_size -= dir_size
-            changed = True
-            logger.info(f"[cache] Evicted {model_dir.name} to enforce cache size limit")
-        if total_size > self.max_cache_size_bytes:
-            # Fallback correction pass with realtime scan when metadata drift exists.
-            remaining_dirs = [p for p in self.cache_dir.iterdir() if p.is_dir()]
-            total_size = sum(self._dir_size_bytes(p) for p in remaining_dirs)
-            for model_dir in remaining_dirs:
+                if measured_any:
+                    self._save_cache_metadata()
+                return
+            changed = measured_any
+
+            def _sort_key(p: Path) -> float:
+                entry = self._cache_metadata.get(p.name, {})
+                ts = entry.get("last_access_ts")
+                if isinstance(ts, (int, float)):
+                    return float(ts)
+                return p.stat().st_mtime
+
+            for model_dir in sorted(model_dirs, key=_sort_key):
+                if total_size <= self.max_cache_size_bytes:
+                    break
+                # Prefer metadata size; fallback to realtime scan for correction when absent.
+                dir_size = dir_sizes.get(model_dir.name)
+                if dir_size is None:
+                    dir_size = self._dir_size_bytes(model_dir)
+                    changed = True
+                shutil.rmtree(model_dir, ignore_errors=True)
                 with self._metadata_lock:
-                    self._update_model_metadata(model_dir.name, size_bytes=self._dir_size_bytes(model_dir))
-            changed = True
-        if changed:
-            self._save_cache_metadata()
+                    self._remove_model_metadata(model_dir.name)
+                total_size -= dir_size
+                changed = True
+                logger.info(f"[cache] Evicted {model_dir.name} to enforce cache size limit")
+            if total_size > self.max_cache_size_bytes:
+                # Metadata drift fallback: verify with full scan.
+                remaining_dirs = self._full_scan_cache_dirs()
+                total_size = sum(self._dir_size_bytes(p) for p in remaining_dirs)
+                for model_dir in remaining_dirs:
+                    with self._metadata_lock:
+                        self._update_model_metadata(
+                            model_dir.name,
+                            size_bytes=self._dir_size_bytes(model_dir),
+                            source="scan_fallback",
+                            verified=True,
+                        )
+                changed = True
+            if changed:
+                self._save_cache_metadata()
+        except Exception as e:
+            logger.warning(f"[cache] Size-limit cleanup failed, fallback to full scan: {e}")
+            self._fallback_full_scan_rebuild_metadata()
 
     def download_with_retry(
         self, url: str, local_path: Path, timeout: int = 300, max_retries: int = 3
-    ) -> bool:
+    ) -> int:
         strategy = RetryStrategy(max_retries=max_retries, base_delay=1.0, backoff_factor=2.0)
 
         @retry_on_error(strategy=strategy)
@@ -206,27 +253,31 @@ class ModelDownloader:
             )
             response.raise_for_status()
             local_path.parent.mkdir(parents=True, exist_ok=True)
+            bytes_written = 0
             with open(local_path, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-            return True
+                        bytes_written += len(chunk)
+            return bytes_written
 
         try:
-            return bool(_download_once())
+            return int(_download_once())
         except Exception as e:
             logger.warning(f"[download] Failed after retries: {url} ({type(e).__name__}: {e})")
-            return False
+            return -1
 
-    def try_mirrors(self, model_id: str, filename: str, local_path: Path) -> bool:
+    def try_mirrors(self, model_id: str, filename: str, local_path: Path) -> tuple[bool, str, int]:
         base_url = f"https://huggingface.co/{model_id}/resolve/main/{filename}"
-        if self.download_with_retry(base_url, local_path):
-            return True
+        downloaded = self.download_with_retry(base_url, local_path)
+        if downloaded >= 0:
+            return True, "huggingface_direct", downloaded
         for mirror in self.mirrors[1:]:
             mirror_url = f"{mirror}/{model_id}/resolve/main/{filename}"
-            if self.download_with_retry(mirror_url, local_path):
-                return True
-        return False
+            downloaded = self.download_with_retry(mirror_url, local_path)
+            if downloaded >= 0:
+                return True, mirror, downloaded
+        return False, "none", 0
 
     def download_model(self, model_config: ModelConfig) -> str:
         model_id = model_config.huggingface_id
@@ -258,7 +309,12 @@ class ModelDownloader:
                 )
                 size_bytes = self._dir_size_bytes(Path(downloaded_path))
                 with self._metadata_lock:
-                    self._update_model_metadata(model_key, size_bytes=size_bytes)
+                    self._update_model_metadata(
+                        model_key,
+                        size_bytes=size_bytes,
+                        source="huggingface_hub",
+                        verified=True,
+                    )
                 self._save_cache_metadata()
                 self._enforce_cache_size_limit()
                 return downloaded_path
@@ -280,10 +336,22 @@ class ModelDownloader:
         for filename in essential_files:
             local_file = cache_path / filename
             if not local_file.exists():
-                self.try_mirrors(model_config.huggingface_id, filename, local_file)
+                ok, src, written = self.try_mirrors(model_config.huggingface_id, filename, local_file)
+                if ok:
+                    with self._metadata_lock:
+                        self._update_model_metadata(
+                            cache_path.name,
+                            size_delta=written,
+                            source=src,
+                        )
         size_bytes = self._dir_size_bytes(cache_path)
         with self._metadata_lock:
-            self._update_model_metadata(cache_path.name, size_bytes=size_bytes)
+            self._update_model_metadata(
+                cache_path.name,
+                size_bytes=size_bytes,
+                source="manual_download",
+                verified=True,
+            )
         self._save_cache_metadata()
         return str(cache_path)
 

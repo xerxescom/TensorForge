@@ -7,6 +7,7 @@ from __future__ import annotations
 import csv
 import json
 import platform
+import random
 import subprocess
 import sys
 import threading
@@ -279,17 +280,27 @@ class GPUSampler:
             self._stop_event.wait(next_interval)
 
     @staticmethod
-    def summarize(samples: list[GPUSample], window_size: int = 10_000) -> dict:
+    def summarize(
+        samples: list[GPUSample],
+        window_size: int = 10_000,
+        stats_precision_mode: str = "exact",
+        approx_reservoir_size: int = 2048,
+    ) -> dict:
         """
         Summarize GPU samples with a single-pass accumulator for mean/max/min.
 
         Notes:
-        - p95 is computed via `numpy.percentile` when numpy is available.
-        - For long runs, data is processed in windows to avoid large one-shot list work.
+        - mean/min/max are always online (single-pass) accumulators.
+        - `exact`: p95 uses full values (numpy when available).
+        - `approximate`: p95 uses reservoir sampling to reduce memory overhead.
         """
 
         if not samples:
-            return {"sample_count": 0}
+            return {"sample_count": 0, "stats_precision_mode": stats_precision_mode}
+
+        precision_mode = (
+            stats_precision_mode if stats_precision_mode in {"exact", "approximate"} else "exact"
+        )
 
         metrics = {
             "gpu_util_%": lambda s: s.gpu_util,
@@ -299,9 +310,18 @@ class GPUSampler:
             "sm_clock_mhz": lambda s: s.sm_clock_mhz,
         }
         accum = {
-            key: {"count": 0, "sum": 0.0, "max": float("-inf"), "min": float("inf"), "values": []}
+            key: {
+                "count": 0,
+                "sum": 0.0,
+                "max": float("-inf"),
+                "min": float("inf"),
+                "values": [],
+                "reservoir": [],
+            }
             for key in metrics
         }
+        rng = random.Random(0)
+        reservoir_size = max(int(approx_reservoir_size), 128)
 
         chunk_size = max(int(window_size), 1)
         for start in range(0, len(samples), chunk_size):
@@ -316,7 +336,17 @@ class GPUSampler:
                         stat["max"] = value
                     if value < stat["min"]:
                         stat["min"] = value
-                    stat["values"].append(value)
+                    if precision_mode == "exact":
+                        stat["values"].append(value)
+                    else:
+                        # Reservoir sampling: O(1) memory for percentile approximation.
+                        reservoir = stat["reservoir"]
+                        if len(reservoir) < reservoir_size:
+                            reservoir.append(value)
+                        else:
+                            j = rng.randint(0, stat["count"] - 1)
+                            if j < reservoir_size:
+                                reservoir[j] = value
 
         def _p95(values: list[float]) -> float:
             if np is not None:
@@ -325,13 +355,13 @@ class GPUSampler:
             idx = min(max(int(len(sorted_values) * 0.95), 0), len(sorted_values) - 1)
             return float(sorted_values[idx])
 
-        summary = {"sample_count": len(samples)}
+        summary = {"sample_count": len(samples), "stats_precision_mode": precision_mode}
         for key, stat in accum.items():
             count = stat["count"]
             if count == 0:
                 summary[key] = {}
                 continue
-            values = stat["values"]
+            values = stat["values"] if precision_mode == "exact" else stat["reservoir"]
             summary[key] = {
                 "mean": round(stat["sum"] / count, 2),
                 "max": round(stat["max"], 2),
@@ -383,6 +413,7 @@ class BenchmarkRunner:
         keep_raw_samples: bool = True,
         adaptive_sampling: bool = True,
         max_raw_samples: int = 1000,
+        stats_precision_mode: str = "exact",
     ):
         self.task_name = task_name
         self.model_name = model_name
@@ -395,6 +426,11 @@ class BenchmarkRunner:
         self.keep_raw_samples = keep_raw_samples
         self.adaptive_sampling = adaptive_sampling
         self.max_raw_samples = max_raw_samples
+        self.stats_precision_mode = (
+            stats_precision_mode
+            if stats_precision_mode in {"exact", "approximate"}
+            else "exact"
+        )
         self._sampler = GPUSampler(
             sample_interval_s, gpu_index, adaptive_sampling=adaptive_sampling
         )
@@ -427,7 +463,10 @@ class BenchmarkRunner:
         samples = self._sampler.stop(max_raw_samples=self.max_raw_samples)
 
         duration = round(end_ts - start_ts, 3)
-        gpu_stats = GPUSampler.summarize(samples)
+        gpu_stats = GPUSampler.summarize(
+            samples,
+            stats_precision_mode=self.stats_precision_mode,
+        )
         gpu_stats["sampler_health"] = self._sampler.health()
         metrics = _enrich_efficiency(metrics, gpu_stats, duration)
 
@@ -500,6 +539,7 @@ class BenchmarkRunner:
             "keep_raw_samples": self.keep_raw_samples,
             "adaptive_sampling": self.adaptive_sampling,
             "max_raw_samples": self.max_raw_samples,
+            "stats_precision_mode": self.stats_precision_mode,
         }
 
     @staticmethod
