@@ -85,6 +85,7 @@ class BenchmarkConfig:
     asr_precision: str = "float16"
 
     concurrent_duration_s: int = 60
+    concurrent_measurement_mode: str = "cold_start"
 
 
 class ConfigManager:
@@ -202,6 +203,7 @@ class ConfigManager:
             asr_model=asr_model_cfg.get("default", "base"),
             asr_precision=asr_model_cfg.get("precision", "float16"),
             concurrent_duration_s=concurrent_test.get("duration_s", 60),
+            concurrent_measurement_mode=concurrent_test.get("measurement_mode", "cold_start"),
         )
 
 
