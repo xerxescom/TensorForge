@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
+
 from .tf_logger import logger
 
 IS_WINDOWS = sys.platform == "win32"
@@ -272,30 +274,66 @@ class GPUSampler:
             self._stop_event.wait(next_interval)
 
     @staticmethod
-    def summarize(samples: list[GPUSample]) -> dict:
-        def _stats(values):
-            if not values:
-                return {}
-            s = sorted(values)
-            n = len(s)
-            p95_idx = min(max(int(n * 0.95), 0), n - 1)
-            return {
-                "mean": round(sum(s) / n, 2),
-                "max": round(s[-1], 2),
-                "min": round(s[0], 2),
-                "p95": round(s[p95_idx], 2),
-            }
+    def summarize(samples: list[GPUSample], window_size: int = 10_000) -> dict:
+        """
+        Summarize GPU samples with a single-pass accumulator for mean/max/min.
+
+        Notes:
+        - p95 is computed via `numpy.percentile` when numpy is available.
+        - For long runs, data is processed in windows to avoid large one-shot list work.
+        """
 
         if not samples:
             return {"sample_count": 0}
-        return {
-            "gpu_util_%": _stats([s.gpu_util for s in samples]),
-            "power_w": _stats([s.power_w for s in samples]),
-            "temp_c": _stats([s.temp_c for s in samples]),
-            "mem_used_mb": _stats([s.mem_used_mb for s in samples]),
-            "sm_clock_mhz": _stats([s.sm_clock_mhz for s in samples]),
-            "sample_count": len(samples),
+
+        metrics = {
+            "gpu_util_%": lambda s: s.gpu_util,
+            "power_w": lambda s: s.power_w,
+            "temp_c": lambda s: s.temp_c,
+            "mem_used_mb": lambda s: s.mem_used_mb,
+            "sm_clock_mhz": lambda s: s.sm_clock_mhz,
         }
+        accum = {
+            key: {"count": 0, "sum": 0.0, "max": float("-inf"), "min": float("inf"), "values": []}
+            for key in metrics
+        }
+
+        chunk_size = max(int(window_size), 1)
+        for start in range(0, len(samples), chunk_size):
+            window = samples[start : start + chunk_size]
+            for sample in window:
+                for key, getter in metrics.items():
+                    value = float(getter(sample))
+                    stat = accum[key]
+                    stat["count"] += 1
+                    stat["sum"] += value
+                    if value > stat["max"]:
+                        stat["max"] = value
+                    if value < stat["min"]:
+                        stat["min"] = value
+                    stat["values"].append(value)
+
+        def _p95(values: list[float]) -> float:
+            if np is not None:
+                return float(np.percentile(values, 95))
+            sorted_values = sorted(values)
+            idx = min(max(int(len(sorted_values) * 0.95), 0), len(sorted_values) - 1)
+            return float(sorted_values[idx])
+
+        summary = {"sample_count": len(samples)}
+        for key, stat in accum.items():
+            count = stat["count"]
+            if count == 0:
+                summary[key] = {}
+                continue
+            values = stat["values"]
+            summary[key] = {
+                "mean": round(stat["sum"] / count, 2),
+                "max": round(stat["max"], 2),
+                "min": round(stat["min"], 2),
+                "p95": round(_p95(values), 2),
+            }
+        return summary
 
     def health(self) -> dict:
         avg_latency = (

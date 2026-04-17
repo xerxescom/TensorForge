@@ -68,3 +68,29 @@ def test_apply_overrides_type_coercion():
     assert cfg.sample_interval_s == pytest.approx(0.1)
     assert cfg.network_timeout == 600
     assert cfg.adaptive_sampling is False
+
+
+def test_apply_overrides_supports_json_list():
+    cfg = BenchmarkConfig()
+    apply_overrides(cfg, {"llm_prompts": 'json:["a","b"]'})
+    assert cfg.llm_prompts == ["a", "b"]
+
+
+def test_apply_overrides_rejects_non_json_list():
+    cfg = BenchmarkConfig()
+    with pytest.raises(ValueError, match="expects a list"):
+        apply_overrides(cfg, {"llm_prompts": "a,b"})
+
+
+def test_apply_overrides_optional_type_validation():
+    cfg = BenchmarkConfig()
+    apply_overrides(cfg, {"network_proxy_host": "proxy.local"})
+    assert cfg.network_proxy_host == "proxy.local"
+    apply_overrides(cfg, {"network_proxy_host": "null"})
+    assert cfg.network_proxy_host is None
+
+
+def test_apply_overrides_optional_int_validation_error():
+    cfg = BenchmarkConfig()
+    with pytest.raises(ValueError, match="network_proxy_port"):
+        apply_overrides(cfg, {"network_proxy_port": "not-int"})
