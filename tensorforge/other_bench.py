@@ -364,6 +364,64 @@ model = WhisperModel("{self.model_name}", device="{self.device}", compute_type="
 audio_files = {files_repr}
 ground_truths = {truths_repr}
 
+def levenshtein_wer(ref_words, hyp_words):
+    n = len(ref_words)
+    m = len(hyp_words)
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    op = [[""] * (m + 1) for _ in range(n + 1)]
+
+    for r in range(1, n + 1):
+        dp[r][0] = r
+        op[r][0] = "D"
+    for c in range(1, m + 1):
+        dp[0][c] = c
+        op[0][c] = "I"
+
+    for r in range(1, n + 1):
+        for c in range(1, m + 1):
+            if ref_words[r - 1] == hyp_words[c - 1]:
+                dp[r][c] = dp[r - 1][c - 1]
+                op[r][c] = "E"
+            else:
+                sub_cost = dp[r - 1][c - 1] + 1
+                del_cost = dp[r - 1][c] + 1
+                ins_cost = dp[r][c - 1] + 1
+                best = min(sub_cost, del_cost, ins_cost)
+                dp[r][c] = best
+                if best == sub_cost:
+                    op[r][c] = "S"
+                elif best == del_cost:
+                    op[r][c] = "D"
+                else:
+                    op[r][c] = "I"
+
+    s = d = ins = 0
+    r, c = n, m
+    while r > 0 or c > 0:
+        move = op[r][c] if r >= 0 and c >= 0 else ""
+        if move in ("E", "S"):
+            if move == "S":
+                s += 1
+            r -= 1
+            c -= 1
+        elif move == "D":
+            d += 1
+            r -= 1
+        elif move == "I":
+            ins += 1
+            c -= 1
+        else:
+            if r > 0:
+                d += 1
+                r -= 1
+            elif c > 0:
+                ins += 1
+                c -= 1
+
+    denom = max(n, 1)
+    wer = round((s + d + ins) / denom, 4)
+    return wer, s, d, ins
+
 results = []
 for i, fpath in enumerate(audio_files):
     audio, sr = sf.read(fpath)
@@ -376,12 +434,15 @@ for i, fpath in enumerate(audio_files):
 
     rtf = round(elapsed / duration_s, 4) if duration_s > 0 else 0
     wer = None
+    wer_approx = None
+    wer_s = wer_d = wer_i = None
     if i < len(ground_truths):
         ref = ground_truths[i].lower().split()
         hyp = transcript.lower().split()
+        wer, wer_s, wer_d, wer_i = levenshtein_wer(ref, hyp)
         sm = SequenceMatcher(None, ref, hyp)
         matches = sum(b.size for b in sm.get_matching_blocks())
-        wer = round(1 - matches / max(len(ref), 1), 4)
+        wer_approx = round(1 - matches / max(len(ref), 1), 4)
 
     results.append({{
         "file": fpath,
@@ -389,15 +450,21 @@ for i, fpath in enumerate(audio_files):
         "duration_s": round(duration_s, 2),
         "elapsed_s": round(elapsed, 3),
         "wer": wer,
+        "wer_approx": wer_approx,
+        "wer_s": wer_s,
+        "wer_d": wer_d,
+        "wer_i": wer_i,
     }})
 
 rtf_list = [r["rtf"] for r in results]
 wer_list = [r["wer"] for r in results if r["wer"] is not None]
+wer_approx_list = [r["wer_approx"] for r in results if r["wer_approx"] is not None]
 print(json.dumps({{
     "n_files": len(results),
     "rtf_mean": round(sum(rtf_list)/len(rtf_list), 4) if rtf_list else 0,
     "rtf_min": round(min(rtf_list), 4) if rtf_list else 0,
     "wer_mean": round(sum(wer_list)/len(wer_list), 4) if wer_list else None,
+    "wer_approx_mean": round(sum(wer_approx_list)/len(wer_approx_list), 4) if wer_approx_list else None,
     "per_file_detail": results,
 }}))
 """
