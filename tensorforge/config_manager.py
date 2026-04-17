@@ -135,6 +135,7 @@ class ConfigManager:
             else:
                 logger.warning(f"Config file {self.config_path} not found, using defaults")
                 self._config = BenchmarkConfig()
+            _validate_critical_fields(self._config)
         return self._config
 
     def _dict_to_config(self, data: dict[str, Any]) -> BenchmarkConfig:
@@ -320,7 +321,34 @@ def apply_overrides(cfg: BenchmarkConfig, overrides: dict[str, str]) -> Benchmar
             raise ValueError(f"Invalid override for {key!r}: {e}") from e
         setattr(cfg, key, value)
 
+    _validate_critical_fields(cfg)
     return cfg
+
+
+def _validate_critical_fields(cfg: BenchmarkConfig):
+    def _in(name: str, value: str, options: set[str]):
+        if value not in options:
+            opts = ", ".join(sorted(options))
+            raise ValueError(f"{name} must be one of {{{opts}}}, got {value!r}")
+
+    def _gt(name: str, value: float, lower: float):
+        if value <= lower:
+            raise ValueError(f"{name} must be > {lower}, got {value}")
+
+    def _ge(name: str, value: float, lower: float):
+        if value < lower:
+            raise ValueError(f"{name} must be >= {lower}, got {value}")
+
+    _gt("sample_interval_s", float(cfg.sample_interval_s), 0.0)
+    _ge("warmup_s", float(cfg.warmup_s), 0.0)
+    _gt("max_raw_samples", float(cfg.max_raw_samples), 0.0)
+    _gt("concurrent_duration_s", float(cfg.concurrent_duration_s), 0.0)
+    _in("stats_precision_mode", cfg.stats_precision_mode, {"exact", "approximate"})
+    _in(
+        "concurrent_measurement_mode",
+        cfg.concurrent_measurement_mode,
+        {"cold_start", "steady_state"},
+    )
 
 
 config_manager = ConfigManager()

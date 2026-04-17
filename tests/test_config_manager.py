@@ -98,3 +98,9 @@ def test_apply_overrides_optional_int_validation_error():
     cfg = BenchmarkConfig()
     with pytest.raises(ValueError, match="network_proxy_port"):
         apply_overrides(cfg, {"network_proxy_port": "not-int"})
+
+
+def test_apply_overrides_critical_field_validation_error():
+    cfg = BenchmarkConfig()
+    with pytest.raises(ValueError, match="stats_precision_mode"):
+        apply_overrides(cfg, {"stats_precision_mode": "fast"})
