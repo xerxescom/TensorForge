@@ -36,6 +36,8 @@ def test_load_config_from_yaml(tmp_path):
                 backend: "ollama"
                 prompts:
                   - "hi"
+              cv:
+                batch_size: 4
             concurrent_test:
               duration_s: 7
             """
@@ -55,6 +57,7 @@ def test_load_config_from_yaml(tmp_path):
     assert cfg.cache_base_dir == "x_cache"
     assert cfg.concurrent_duration_s == 7
     assert cfg.llm_prompts == ["hi"]
+    assert cfg.cv_batch_size == 4
 
 
 def test_apply_overrides_type_coercion():
@@ -104,3 +107,9 @@ def test_apply_overrides_critical_field_validation_error():
     cfg = BenchmarkConfig()
     with pytest.raises(ValueError, match="stats_precision_mode"):
         apply_overrides(cfg, {"stats_precision_mode": "fast"})
+
+
+def test_apply_overrides_cv_batch_size_validation_error():
+    cfg = BenchmarkConfig()
+    with pytest.raises(ValueError, match="cv_batch_size"):
+        apply_overrides(cfg, {"cv_batch_size": "0"})
