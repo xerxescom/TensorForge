@@ -149,6 +149,9 @@ class ConcurrentStressTest:
         total_tokens = 0
         model_load_s = 0.0
         warmup_s = 0.0
+        failed_rounds = 0
+        successful_rounds = 0
+        last_error_payload: dict[str, str] | None = None
         prompt = "Explain quantum entanglement briefly."
         warmup_prompt = "Reply with exactly one word: warm."
         end_to_end_t0 = time.perf_counter()
@@ -162,6 +165,7 @@ class ConcurrentStressTest:
                     text=True,
                     timeout=90,
                     encoding="utf-8",
+                    check=True,
                     **_subprocess_kwargs(),
                 )
                 model_load_s = time.perf_counter() - load_t0
@@ -173,9 +177,32 @@ class ConcurrentStressTest:
                     text=True,
                     timeout=90,
                     encoding="utf-8",
+                    check=True,
                     **_subprocess_kwargs(),
                 )
                 warmup_s = time.perf_counter() - warmup_t0
+            except subprocess.CalledProcessError as e:
+                err = structured_error(
+                    error=e,
+                    error_stage="concurrent_llm_warmup_subprocess",
+                    trace_text=(e.stderr or e.stdout or str(e)),
+                )
+                return {
+                    "measurement_mode": self.measurement_mode,
+                    "tokens_generated": 0,
+                    "tokens_per_s": 0.0,
+                    "tokens_per_s_end_to_end": 0.0,
+                    "tokens_per_s_inference_only": 0.0,
+                    "tokens_estimated": True,
+                    "model_load_s": 0.0,
+                    "warmup_s": 0.0,
+                    "inference_only_s": 0.0,
+                    "end_to_end_s": round(time.perf_counter() - end_to_end_t0, 3),
+                    "successful_rounds": 0,
+                    "failed_rounds": 1,
+                    "failure_rate": 1.0,
+                    **err,
+                }
             except Exception:
                 model_load_s = 0.0
                 warmup_s = 0.0
@@ -192,20 +219,38 @@ class ConcurrentStressTest:
                     text=True,
                     timeout=60,
                     encoding="utf-8",
+                    check=True,
                     **_subprocess_kwargs(),
                 )
                 if self.measurement_mode == "cold_start" and model_load_s == 0.0:
                     model_load_s = time.perf_counter() - one_t0
                 total_tokens += int(len(out.stdout.split()) * 1.3)
+                successful_rounds += 1
+            except subprocess.CalledProcessError as e:
+                failed_rounds += 1
+                last_error_payload = structured_error(
+                    error=e,
+                    error_stage="concurrent_llm_inference_subprocess",
+                    trace_text=(e.stderr or e.stdout or str(e)),
+                )
+                continue
             except Exception:
+                failed_rounds += 1
+                last_error_payload = structured_error(
+                    error="llm_inference_exception",
+                    error_stage="concurrent_llm_inference_subprocess",
+                    trace_text="unexpected runtime exception in llm inference subprocess",
+                )
                 break
 
         inference_only_s = time.perf_counter() - t_infer_start
         end_to_end_s = time.perf_counter() - end_to_end_t0
         tokens_per_s_end_to_end = round(total_tokens / max(end_to_end_s, 1e-6), 2)
         tokens_per_s_inference_only = round(total_tokens / max(inference_only_s, 1e-6), 2)
+        total_rounds = successful_rounds + failed_rounds
+        failure_rate = round(failed_rounds / total_rounds, 4) if total_rounds > 0 else 0.0
 
-        return {
+        result = {
             "measurement_mode": self.measurement_mode,
             "tokens_generated": total_tokens,
             "tokens_per_s": tokens_per_s_end_to_end,
@@ -216,7 +261,13 @@ class ConcurrentStressTest:
             "warmup_s": round(warmup_s, 3),
             "inference_only_s": round(inference_only_s, 3),
             "end_to_end_s": round(end_to_end_s, 3),
+            "successful_rounds": successful_rounds,
+            "failed_rounds": failed_rounds,
+            "failure_rate": failure_rate,
         }
+        if last_error_payload:
+            result.update(last_error_payload)
+        return result
 
     def _timed_diffusion(self, model: str, duration_s: float) -> dict:
         # Keep this as a subprocess to isolate OOM, but avoid writing temp files.
