@@ -76,3 +76,24 @@ def test_summarize_windowed_matches_non_windowed():
     stats_a = GPUSampler.summarize(samples, window_size=10)
     stats_b = GPUSampler.summarize(samples, window_size=1000)
     assert stats_a == stats_b
+
+
+def test_summarize_supports_approximate_mode():
+    t0 = time.time()
+    samples = [
+        GPUSample(
+            timestamp=t0 + i,
+            gpu_util=float(i % 100),
+            mem_used_mb=float(100 + i),
+            mem_total_mb=1000.0,
+            power_w=float(50 + (i % 40)),
+            temp_c=float(40 + (i % 10)),
+            sm_clock_mhz=float(1000 + i),
+            mem_clock_mhz=5000.0,
+        )
+        for i in range(5000)
+    ]
+    stats = GPUSampler.summarize(samples, stats_precision_mode="approximate")
+    assert stats["stats_precision_mode"] == "approximate"
+    assert "p95" in stats["gpu_util_%"]
+    assert stats["gpu_util_%"]["max"] >= stats["gpu_util_%"]["min"]

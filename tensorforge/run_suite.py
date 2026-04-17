@@ -31,6 +31,7 @@ class ConcurrentStressTest:
         output_dir: str = "results",
         gpu_index: int = 0,
         measurement_mode: str = "cold_start",
+        stats_precision_mode: str = "exact",
     ):
         self.tasks = tasks
         self.output_dir = Path(output_dir)
@@ -38,6 +39,9 @@ class ConcurrentStressTest:
         self.gpu_index = gpu_index
         self.measurement_mode = (
             measurement_mode if measurement_mode in {"cold_start", "steady_state"} else "cold_start"
+        )
+        self.stats_precision_mode = (
+            stats_precision_mode if stats_precision_mode in {"exact", "approximate"} else "exact"
         )
 
     def run(self) -> dict:
@@ -67,7 +71,10 @@ class ConcurrentStressTest:
 
         elapsed = time.time() - t0
         samples = sampler.stop()
-        gpu_stats = GPUSampler.summarize(samples)
+        gpu_stats = GPUSampler.summarize(
+            samples,
+            stats_precision_mode=self.stats_precision_mode,
+        )
 
         # Phase 3: compute degradation ratios for comparable metrics.
         degradation: dict[str, float | None] = {}
@@ -76,7 +83,15 @@ class ConcurrentStressTest:
                 continue
             key = f"{cfg['type']}_{cfg.get('model', '')}"
             baseline = baselines.get(key, {})
-            for metric in ["tokens_per_s", "it_per_s", "fps"]:
+            for metric in [
+                "tokens_per_s",
+                "tokens_per_s_end_to_end",
+                "tokens_per_s_inference_only",
+                "it_per_s",
+                "it_per_s_end_to_end",
+                "it_per_s_inference_only",
+                "fps",
+            ]:
                 if metric in baseline and metric in conc:
                     degradation[f"{key}_{metric}_ratio"] = self._safe_ratio(
                         conc.get(metric), baseline.get(metric)
@@ -85,6 +100,7 @@ class ConcurrentStressTest:
         result = {
             "test_type": "concurrent_stress",
             "measurement_mode": self.measurement_mode,
+            "stats_precision_mode": self.stats_precision_mode,
             "n_tasks": len(self.tasks),
             "total_elapsed_s": round(elapsed, 3),
             "gpu_stats": gpu_stats,
@@ -132,12 +148,14 @@ class ConcurrentStressTest:
     def _timed_llm(self, model: str, duration_s: float) -> dict:
         total_tokens = 0
         model_load_s = 0.0
+        warmup_s = 0.0
         prompt = "Explain quantum entanglement briefly."
         warmup_prompt = "Reply with exactly one word: warm."
+        end_to_end_t0 = time.perf_counter()
 
         if self.measurement_mode == "steady_state":
-            warmup_t0 = time.perf_counter()
             try:
+                load_t0 = time.perf_counter()
                 subprocess.run(
                     ["ollama", "run", model, warmup_prompt],
                     capture_output=True,
@@ -146,9 +164,21 @@ class ConcurrentStressTest:
                     encoding="utf-8",
                     **_subprocess_kwargs(),
                 )
-                model_load_s = time.perf_counter() - warmup_t0
+                model_load_s = time.perf_counter() - load_t0
+
+                warmup_t0 = time.perf_counter()
+                subprocess.run(
+                    ["ollama", "run", model, warmup_prompt],
+                    capture_output=True,
+                    text=True,
+                    timeout=90,
+                    encoding="utf-8",
+                    **_subprocess_kwargs(),
+                )
+                warmup_s = time.perf_counter() - warmup_t0
             except Exception:
                 model_load_s = 0.0
+                warmup_s = 0.0
 
         t_infer_start = time.perf_counter()
         t_end = time.time() + duration_s
@@ -171,13 +201,21 @@ class ConcurrentStressTest:
                 break
 
         inference_only_s = time.perf_counter() - t_infer_start
+        end_to_end_s = time.perf_counter() - end_to_end_t0
+        tokens_per_s_end_to_end = round(total_tokens / max(end_to_end_s, 1e-6), 2)
+        tokens_per_s_inference_only = round(total_tokens / max(inference_only_s, 1e-6), 2)
 
         return {
+            "measurement_mode": self.measurement_mode,
             "tokens_generated": total_tokens,
-            "tokens_per_s": round(total_tokens / duration_s, 2),
+            "tokens_per_s": tokens_per_s_end_to_end,
+            "tokens_per_s_end_to_end": tokens_per_s_end_to_end,
+            "tokens_per_s_inference_only": tokens_per_s_inference_only,
             "tokens_estimated": True,
             "model_load_s": round(model_load_s, 3),
+            "warmup_s": round(warmup_s, 3),
             "inference_only_s": round(inference_only_s, 3),
+            "end_to_end_s": round(end_to_end_s, 3),
         }
 
     def _timed_diffusion(self, model: str, duration_s: float) -> dict:
@@ -197,8 +235,11 @@ pipe = AutoPipelineForText2Image.from_pretrained(
 ).to("cuda")
 model_load_s = time.perf_counter() - load_t0
 
+warmup_s = 0.0
 if mode == "steady_state":
+    warmup_t0 = time.perf_counter()
     pipe(prompt="warmup prompt", num_inference_steps=steps)
+    warmup_s = time.perf_counter() - warmup_t0
 
 infer_t0 = time.perf_counter()
 t_end = time.time() + {duration_s}
@@ -207,14 +248,19 @@ while time.time() < t_end:
     n_images += 1
     total_steps += steps
 inference_only_s = time.perf_counter() - infer_t0
+end_to_end_s = model_load_s + warmup_s + inference_only_s
 
 print(json.dumps({{
     "measurement_mode": mode,
     "model_load_s": round(model_load_s, 3),
+    "warmup_s": round(warmup_s, 3),
     "inference_only_s": round(inference_only_s, 3),
+    "end_to_end_s": round(end_to_end_s, 3),
     "n_images": n_images,
     "total_steps": total_steps,
-    "it_per_s": round(total_steps / {duration_s}, 3),
+    "it_per_s": round(total_steps / max(end_to_end_s, 1e-6), 3),
+    "it_per_s_end_to_end": round(total_steps / max(end_to_end_s, 1e-6), 3),
+    "it_per_s_inference_only": round(total_steps / max(inference_only_s, 1e-6), 3),
 }}))
 """
         try:
@@ -305,6 +351,7 @@ class FullBenchmarkSuite:
             warmup_s=self.config.warmup_s,
             adaptive_sampling=self.config.adaptive_sampling,
             max_raw_samples=self.config.max_raw_samples,
+            stats_precision_mode=self.config.stats_precision_mode,
         )
 
         phases = {
@@ -343,6 +390,7 @@ class FullBenchmarkSuite:
                 precision=self.config.cv_precision,
                 n_frames=self.config.cv_n_frames,
                 image_size=self.config.cv_image_size,
+                batch_size=self.config.cv_batch_size,
                 **common,
             ).run(),
             "asr": lambda: ASRBenchmark(
@@ -366,6 +414,7 @@ class FullBenchmarkSuite:
                 output_dir=str(self.output_dir),
                 gpu_index=self.gpu_index,
                 measurement_mode=self.config.concurrent_measurement_mode,
+                stats_precision_mode=self.config.stats_precision_mode,
             ).run(),
         }
 
@@ -429,6 +478,22 @@ class FullBenchmarkSuite:
 
 
 def main(argv: list[str] | None = None) -> int:
+    def _load_structured_file(path: Path):
+        raw = path.read_text(encoding="utf-8").strip()
+        if not raw:
+            raise ValueError(f"file is empty: {path}")
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            try:
+                import yaml
+
+                return yaml.safe_load(raw)
+            except Exception as e:
+                raise ValueError(
+                    f"failed to parse {path} as JSON/YAML: {type(e).__name__}: {e}"
+                ) from e
+
     parser = argparse.ArgumentParser(description="GPU AI Benchmark Suite")
     parser.add_argument("--gpu-name", default="GPU", help="Friendly name for the GPU")
     parser.add_argument("--gpu-index", type=int, default=0)
@@ -439,14 +504,17 @@ def main(argv: list[str] | None = None) -> int:
         dest="set_kv",
         action="append",
         default=[],
-        help="Override config: key=value (key is a BenchmarkConfig field name)",
+        help='Override config: key=value. Supports json: prefix, e.g. --set llm_prompts=json:["a","b"]',
     )
     parser.add_argument(
         "--set-file",
         dest="set_file_kv",
         action="append",
         default=[],
-        help="Override config from JSON file content: key=path/to/value.json",
+        help=(
+            "Inject override from file. "
+            "Use key=path (single field) or path to a JSON/YAML object with multiple keys."
+        ),
     )
     parser.add_argument(
         "--skip", nargs="*", default=[], help="Phase names to skip, e.g. --skip diffusion asr"
@@ -464,14 +532,34 @@ def main(argv: list[str] | None = None) -> int:
         k, v = item.split("=", 1)
         overrides[k.strip()] = v.strip()
     for item in args.set_file_kv or []:
-        if "=" not in item:
-            raise SystemExit(f"Invalid --set-file {item!r}. Expected key=path")
-        k, path_raw = item.split("=", 1)
+        if "=" in item:
+            k, path_raw = item.split("=", 1)
+            key = k.strip()
+        else:
+            key = ""
+            path_raw = item
         value_path = Path(path_raw.strip())
         if not value_path.exists():
             raise SystemExit(f"Invalid --set-file {item!r}. File not found: {value_path}")
-        raw_json = value_path.read_text(encoding="utf-8").strip()
-        overrides[k.strip()] = f"json:{raw_json}"
+        try:
+            parsed = _load_structured_file(value_path)
+        except Exception as e:
+            raise SystemExit(f"Invalid --set-file {item!r}: {e}") from e
+        if key:
+            if isinstance(parsed, str):
+                overrides[key] = parsed
+            else:
+                overrides[key] = f"json:{json.dumps(parsed, ensure_ascii=False)}"
+        else:
+            if not isinstance(parsed, dict):
+                raise SystemExit(
+                    f"Invalid --set-file {item!r}: expected JSON/YAML object when key is omitted"
+                )
+            for k, v in parsed.items():
+                if isinstance(v, str):
+                    overrides[str(k)] = v
+                else:
+                    overrides[str(k)] = f"json:{json.dumps(v, ensure_ascii=False)}"
 
     skip = args.skip
     if args.only:
@@ -486,15 +574,18 @@ def main(argv: list[str] | None = None) -> int:
         ]
         skip = [p for p in all_phases if p not in args.only]
 
-    suite = FullBenchmarkSuite(
-        output_dir=args.output_dir,
-        gpu_name=args.gpu_name,
-        gpu_index=args.gpu_index,
-        skip_phases=skip,
-        config_path=args.config,
-        config_overrides=overrides,
-        verbose=args.verbose,
-    )
+    try:
+        suite = FullBenchmarkSuite(
+            output_dir=args.output_dir,
+            gpu_name=args.gpu_name,
+            gpu_index=args.gpu_index,
+            skip_phases=skip,
+            config_path=args.config,
+            config_overrides=overrides,
+            verbose=args.verbose,
+        )
+    except (KeyError, ValueError) as e:
+        raise SystemExit(f"Config override error: {e}") from e
     suite.run_all()
     return 0
 

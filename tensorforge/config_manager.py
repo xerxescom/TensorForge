@@ -24,6 +24,7 @@ class BenchmarkConfig:
     timeout_s: int = 120
     max_raw_samples: int = 1000
     adaptive_sampling: bool = True
+    stats_precision_mode: str = "exact"
 
     cache_base_dir: str = "models_cache"
     cache_max_size_gb: float = 50.0
@@ -82,6 +83,7 @@ class BenchmarkConfig:
     cv_model: str = "yolov8n"
     cv_precision: str = "fp16"
     cv_image_size: int = 640
+    cv_batch_size: int = 1
 
     asr_model: str = "base"
     asr_precision: str = "float16"
@@ -134,6 +136,7 @@ class ConfigManager:
             else:
                 logger.warning(f"Config file {self.config_path} not found, using defaults")
                 self._config = BenchmarkConfig()
+            _validate_critical_fields(self._config)
         return self._config
 
     def _dict_to_config(self, data: dict[str, Any]) -> BenchmarkConfig:
@@ -163,6 +166,7 @@ class ConfigManager:
             timeout_s=default_settings.get("timeout_s", 120),
             max_raw_samples=default_settings.get("max_raw_samples", 1000),
             adaptive_sampling=default_settings.get("adaptive_sampling", True),
+            stats_precision_mode=default_settings.get("stats_precision_mode", "exact"),
             cache_base_dir=cache.get("base_dir", "models_cache"),
             cache_max_size_gb=cache.get("max_size_gb", 50.0),
             cache_cleanup_old_models=cache.get("cleanup_old_models", True),
@@ -202,6 +206,7 @@ class ConfigManager:
             cv_model=cv_model_cfg.get("default", "yolov8n"),
             cv_precision=cv_model_cfg.get("precision", "fp16"),
             cv_image_size=cv_model_cfg.get("image_size", 640),
+            cv_batch_size=cv_model_cfg.get("batch_size", 1),
             asr_model=asr_model_cfg.get("default", "base"),
             asr_precision=asr_model_cfg.get("precision", "float16"),
             concurrent_duration_s=concurrent_test.get("duration_s", 60),
@@ -318,7 +323,35 @@ def apply_overrides(cfg: BenchmarkConfig, overrides: dict[str, str]) -> Benchmar
             raise ValueError(f"Invalid override for {key!r}: {e}") from e
         setattr(cfg, key, value)
 
+    _validate_critical_fields(cfg)
     return cfg
+
+
+def _validate_critical_fields(cfg: BenchmarkConfig):
+    def _in(name: str, value: str, options: set[str]):
+        if value not in options:
+            opts = ", ".join(sorted(options))
+            raise ValueError(f"{name} must be one of {{{opts}}}, got {value!r}")
+
+    def _gt(name: str, value: float, lower: float):
+        if value <= lower:
+            raise ValueError(f"{name} must be > {lower}, got {value}")
+
+    def _ge(name: str, value: float, lower: float):
+        if value < lower:
+            raise ValueError(f"{name} must be >= {lower}, got {value}")
+
+    _gt("sample_interval_s", float(cfg.sample_interval_s), 0.0)
+    _ge("warmup_s", float(cfg.warmup_s), 0.0)
+    _gt("max_raw_samples", float(cfg.max_raw_samples), 0.0)
+    _gt("concurrent_duration_s", float(cfg.concurrent_duration_s), 0.0)
+    _gt("cv_batch_size", float(cfg.cv_batch_size), 0.0)
+    _in("stats_precision_mode", cfg.stats_precision_mode, {"exact", "approximate"})
+    _in(
+        "concurrent_measurement_mode",
+        cfg.concurrent_measurement_mode,
+        {"cold_start", "steady_state"},
+    )
 
 
 config_manager = ConfigManager()

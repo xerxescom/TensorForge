@@ -245,6 +245,7 @@ class CVBenchmark(BenchmarkRunner):
             "n_frames": self.n_frames,
             "image_size": self.image_size,
             "batch_size": self.batch_size,
+            "effective_batch_size": worker_metrics.get("effective_batch_size", self.batch_size),
             "total_elapsed_s": round(elapsed, 3),
             **worker_metrics,
         }
@@ -293,6 +294,8 @@ def pct_idx(total: int, q: float) -> int:
 
 print(json.dumps({{
     "device": device,
+    "configured_batch_size": batch_size,
+    "effective_batch_size": round(total_frames / max(processed_batches, 1), 3),
     "fps": round((total_frames * 1000) / total_ms, 2),
     "batch_per_s": round((processed_batches * 1000) / total_ms, 2),
     "latency_p50_ms": round(lat[pct_idx(n, 0.50)], 3),
