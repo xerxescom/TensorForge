@@ -9,7 +9,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import ClassVar
+from typing import Callable, ClassVar
 
 from .collector import BenchmarkRunner, _subprocess_kwargs
 from .error_schema import classify_error_type, short_trace
@@ -34,6 +34,7 @@ class LLMBenchmark(BenchmarkRunner):
         context_lengths: list[int] | None = None,
         use_ollama: bool = True,
         local_model_path: str | None = None,
+        ttft_sampling_mode: str = "chunk",
         **kwargs,
     ):
         super().__init__(
@@ -44,6 +45,7 @@ class LLMBenchmark(BenchmarkRunner):
         self.context_lengths = context_lengths or []
         self.use_ollama = use_ollama
         self.local_model_path = local_model_path
+        self.ttft_sampling_mode = ttft_sampling_mode.lower()
         self._check_model_availability()
 
     def _check_model_availability(self):
@@ -99,6 +101,7 @@ class LLMBenchmark(BenchmarkRunner):
             "success_count": success_count,
             "failure_count": len(run_results) - success_count,
             "success_rate": round(success_count / len(run_results), 4) if run_results else 0,
+            "ttft_sampling_mode": self.ttft_sampling_mode,
             "tokens_per_s_mean": round(sum(tps_list) / len(tps_list), 2) if tps_list else 0,
             "tokens_per_s_max": round(max(tps_list), 2) if tps_list else 0,
             "tokens_per_s_min": round(min(tps_list), 2) if tps_list else 0,
@@ -137,32 +140,10 @@ class LLMBenchmark(BenchmarkRunner):
                 bufsize=1,
                 **_subprocess_kwargs(),
             )
-            output_chunks: list[str] = []
-            first_output_ts: float | None = None
-
-            def _read_stdout_chunks():
-                nonlocal first_output_ts
-                if not proc.stdout:
-                    return
-                while True:
-                    chunk = proc.stdout.read(256)
-                    if not chunk:
-                        break
-                    if first_output_ts is None and chunk.strip():
-                        first_output_ts = time.perf_counter()
-                    output_chunks.append(chunk)
-
-            reader = threading.Thread(target=_read_stdout_chunks, daemon=True)
-            reader.start()
-
-            try:
-                proc.wait(timeout=120)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-                raise
-            finally:
-                reader.join(timeout=2)
+            output_chunks, first_output_ts, sampling_mode = self._sample_stdout(
+                proc, on_data=lambda _data: None
+            )
+            self.ttft_sampling_mode = sampling_mode
 
             remaining_err = proc.stderr.read() if proc.stderr else ""
             output_text = "".join(output_chunks)
@@ -203,6 +184,7 @@ class LLMBenchmark(BenchmarkRunner):
         return {
             "prompt_preview": prompt[:60] + "...",
             "ttft_s": ttft_s,
+            "ttft_sampling_mode": self.ttft_sampling_mode,
             "total_elapsed_s": total_elapsed_s,
             "tokens_per_s": tokens_per_s,
             "tokens_generated": tokens_generated,
@@ -212,6 +194,55 @@ class LLMBenchmark(BenchmarkRunner):
             "error_stage": "llm_subprocess" if error else None,
             "short_trace": short_trace(str(error)) if error else None,
         }
+
+    def _resolve_sampling_mode(self) -> str:
+        mode = self.ttft_sampling_mode
+        return mode if mode in {"char", "chunk", "line"} else "chunk"
+
+    def _sample_stdout(
+        self, proc: subprocess.Popen, on_data: Callable[[str], None]
+    ) -> tuple[list[str], float | None, str]:
+        """
+        Sample stdout with configured mode and record first non-empty output timestamp.
+        """
+        output_chunks: list[str] = []
+        first_output_ts: float | None = None
+        mode = self._resolve_sampling_mode()
+
+        def _consume(data: str):
+            nonlocal first_output_ts
+            if not data:
+                return
+            if first_output_ts is None and data.strip():
+                first_output_ts = time.perf_counter()
+            output_chunks.append(data)
+            on_data(data)
+
+        def _reader():
+            if not proc.stdout:
+                return
+            read_fn = {
+                "char": lambda: proc.stdout.read(1),
+                "line": proc.stdout.readline,
+                "chunk": lambda: proc.stdout.read(256),
+            }[mode]
+            while True:
+                buf = read_fn()
+                if not buf:
+                    break
+                _consume(buf)
+
+        reader = threading.Thread(target=_reader, daemon=True)
+        reader.start()
+        try:
+            proc.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise
+        finally:
+            reader.join(timeout=2)
+        return output_chunks, first_output_ts, mode
 
 
 class LLMContextScaleBenchmark(BenchmarkRunner):
