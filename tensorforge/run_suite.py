@@ -24,11 +24,20 @@ from .tf_logger import logger
 class ConcurrentStressTest:
     """Run multiple workload types concurrently and compare against single-task baselines."""
 
-    def __init__(self, tasks: list[dict], output_dir: str = "results", gpu_index: int = 0):
+    def __init__(
+        self,
+        tasks: list[dict],
+        output_dir: str = "results",
+        gpu_index: int = 0,
+        measurement_mode: str = "cold_start",
+    ):
         self.tasks = tasks
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.gpu_index = gpu_index
+        self.measurement_mode = (
+            measurement_mode if measurement_mode in {"cold_start", "steady_state"} else "cold_start"
+        )
 
     def run(self) -> dict:
         logger.info(f"[Concurrent] Starting {len(self.tasks)} tasks simultaneously ...")
@@ -74,6 +83,7 @@ class ConcurrentStressTest:
 
         result = {
             "test_type": "concurrent_stress",
+            "measurement_mode": self.measurement_mode,
             "n_tasks": len(self.tasks),
             "total_elapsed_s": round(elapsed, 3),
             "gpu_stats": gpu_stats,
@@ -114,11 +124,31 @@ class ConcurrentStressTest:
 
     def _timed_llm(self, model: str, duration_s: float) -> dict:
         total_tokens = 0
-        t_end = time.time() + duration_s
+        model_load_s = 0.0
         prompt = "Explain quantum entanglement briefly."
+        warmup_prompt = "Reply with exactly one word: warm."
+
+        if self.measurement_mode == "steady_state":
+            warmup_t0 = time.perf_counter()
+            try:
+                subprocess.run(
+                    ["ollama", "run", model, warmup_prompt],
+                    capture_output=True,
+                    text=True,
+                    timeout=90,
+                    encoding="utf-8",
+                    **_subprocess_kwargs(),
+                )
+                model_load_s = time.perf_counter() - warmup_t0
+            except Exception:
+                model_load_s = 0.0
+
+        t_infer_start = time.perf_counter()
+        t_end = time.time() + duration_s
 
         while time.time() < t_end:
             try:
+                one_t0 = time.perf_counter()
                 out = subprocess.run(
                     ["ollama", "run", model, prompt],
                     capture_output=True,
@@ -127,14 +157,20 @@ class ConcurrentStressTest:
                     encoding="utf-8",
                     **_subprocess_kwargs(),
                 )
+                if self.measurement_mode == "cold_start" and model_load_s == 0.0:
+                    model_load_s = time.perf_counter() - one_t0
                 total_tokens += int(len(out.stdout.split()) * 1.3)
             except Exception:
                 break
+
+        inference_only_s = time.perf_counter() - t_infer_start
 
         return {
             "tokens_generated": total_tokens,
             "tokens_per_s": round(total_tokens / duration_s, 2),
             "tokens_estimated": True,
+            "model_load_s": round(model_load_s, 3),
+            "inference_only_s": round(inference_only_s, 3),
         }
 
     def _timed_diffusion(self, model: str, duration_s: float) -> dict:
@@ -144,21 +180,31 @@ import json, time
 import torch
 from diffusers import AutoPipelineForText2Image
 
-pipe = AutoPipelineForText2Image.from_pretrained(
-    "{model}", torch_dtype=torch.float16, variant="fp16"
-).to("cuda")
-
-t_end = time.time() + {duration_s}
 n_images = 0
 total_steps = 0
 steps = 10
+mode = "{self.measurement_mode}"
+load_t0 = time.perf_counter()
+pipe = AutoPipelineForText2Image.from_pretrained(
+    "{model}", torch_dtype=torch.float16, variant="fp16"
+).to("cuda")
+model_load_s = time.perf_counter() - load_t0
 
+if mode == "steady_state":
+    pipe(prompt="warmup prompt", num_inference_steps=steps)
+
+infer_t0 = time.perf_counter()
+t_end = time.time() + {duration_s}
 while time.time() < t_end:
     pipe(prompt="a red apple", num_inference_steps=steps)
     n_images += 1
     total_steps += steps
+inference_only_s = time.perf_counter() - infer_t0
 
 print(json.dumps({{
+    "measurement_mode": mode,
+    "model_load_s": round(model_load_s, 3),
+    "inference_only_s": round(inference_only_s, 3),
     "n_images": n_images,
     "total_steps": total_steps,
     "it_per_s": round(total_steps / {duration_s}, 3),
@@ -308,6 +354,7 @@ class FullBenchmarkSuite:
                 ],
                 output_dir=str(self.output_dir),
                 gpu_index=self.gpu_index,
+                measurement_mode=self.config.concurrent_measurement_mode,
             ).run(),
         }
 
