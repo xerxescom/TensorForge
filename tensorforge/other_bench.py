@@ -184,7 +184,7 @@ class CVBenchmark(BenchmarkRunner):
         )
         self.n_frames = n_frames
         self.image_size = image_size
-        self.batch_size = batch_size
+        self.batch_size = max(int(batch_size), 1)
 
     def run_task(self) -> dict:
         script = self._build_script()
@@ -234,24 +234,42 @@ model = YOLO("{self.model_name}.pt")
 frame = np.zeros(({self.image_size}, {self.image_size}, 3), dtype=np.uint8)
 
 for _ in range(10):
-    model.predict(frame, imgsz={self.image_size}, device=device, half=(half and device.startswith("cuda")), verbose=False)
+    warmup_batch = [frame] * {self.batch_size}
+    model.predict(warmup_batch, imgsz={self.image_size}, device=device, half=(half and device.startswith("cuda")), verbose=False)
 
-latencies = []
-for _ in range({self.n_frames}):
+batch_latencies = []
+per_frame_latencies = []
+total_frames = {self.n_frames}
+batch_size = {self.batch_size}
+processed_batches = 0
+
+for start in range(0, total_frames, batch_size):
+    current_batch = min(batch_size, total_frames - start)
+    inputs = [frame] * current_batch
     t0 = time.perf_counter()
-    model.predict(frame, imgsz={self.image_size}, device=device, half=(half and device.startswith("cuda")), verbose=False)
-    latencies.append((time.perf_counter() - t0) * 1000)
+    model.predict(inputs, imgsz={self.image_size}, device=device, half=(half and device.startswith("cuda")), verbose=False)
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+    batch_latencies.append(elapsed_ms)
+    per_frame_latencies.append(elapsed_ms / current_batch)
+    processed_batches += 1
 
-lat = sorted(latencies)
+lat = sorted(per_frame_latencies)
 n = len(lat)
+total_ms = sum(batch_latencies)
+
+def pct_idx(total: int, q: float) -> int:
+    return min(max(int(total * q), 0), total - 1)
+
 print(json.dumps({{
     "device": device,
-    "fps": round(1000 / (sum(latencies) / n), 2),
-    "latency_p50_ms": round(lat[int(n * 0.50)], 3),
-    "latency_p95_ms": round(lat[int(n * 0.95)], 3),
-    "latency_p99_ms": round(lat[int(n * 0.99)], 3),
+    "fps": round((total_frames * 1000) / total_ms, 2),
+    "batch_per_s": round((processed_batches * 1000) / total_ms, 2),
+    "latency_p50_ms": round(lat[pct_idx(n, 0.50)], 3),
+    "latency_p95_ms": round(lat[pct_idx(n, 0.95)], 3),
+    "latency_p99_ms": round(lat[pct_idx(n, 0.99)], 3),
     "latency_min_ms": round(lat[0], 3),
     "latency_max_ms": round(lat[-1], 3),
+    "processed_batches": processed_batches,
 }}))
 """
 
@@ -346,6 +364,64 @@ model = WhisperModel("{self.model_name}", device="{self.device}", compute_type="
 audio_files = {files_repr}
 ground_truths = {truths_repr}
 
+def levenshtein_wer(ref_words, hyp_words):
+    n = len(ref_words)
+    m = len(hyp_words)
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    op = [[""] * (m + 1) for _ in range(n + 1)]
+
+    for r in range(1, n + 1):
+        dp[r][0] = r
+        op[r][0] = "D"
+    for c in range(1, m + 1):
+        dp[0][c] = c
+        op[0][c] = "I"
+
+    for r in range(1, n + 1):
+        for c in range(1, m + 1):
+            if ref_words[r - 1] == hyp_words[c - 1]:
+                dp[r][c] = dp[r - 1][c - 1]
+                op[r][c] = "E"
+            else:
+                sub_cost = dp[r - 1][c - 1] + 1
+                del_cost = dp[r - 1][c] + 1
+                ins_cost = dp[r][c - 1] + 1
+                best = min(sub_cost, del_cost, ins_cost)
+                dp[r][c] = best
+                if best == sub_cost:
+                    op[r][c] = "S"
+                elif best == del_cost:
+                    op[r][c] = "D"
+                else:
+                    op[r][c] = "I"
+
+    s = d = ins = 0
+    r, c = n, m
+    while r > 0 or c > 0:
+        move = op[r][c] if r >= 0 and c >= 0 else ""
+        if move in ("E", "S"):
+            if move == "S":
+                s += 1
+            r -= 1
+            c -= 1
+        elif move == "D":
+            d += 1
+            r -= 1
+        elif move == "I":
+            ins += 1
+            c -= 1
+        else:
+            if r > 0:
+                d += 1
+                r -= 1
+            elif c > 0:
+                ins += 1
+                c -= 1
+
+    denom = max(n, 1)
+    wer = round((s + d + ins) / denom, 4)
+    return wer, s, d, ins
+
 results = []
 for i, fpath in enumerate(audio_files):
     audio, sr = sf.read(fpath)
@@ -358,12 +434,15 @@ for i, fpath in enumerate(audio_files):
 
     rtf = round(elapsed / duration_s, 4) if duration_s > 0 else 0
     wer = None
+    wer_approx = None
+    wer_s = wer_d = wer_i = None
     if i < len(ground_truths):
         ref = ground_truths[i].lower().split()
         hyp = transcript.lower().split()
+        wer, wer_s, wer_d, wer_i = levenshtein_wer(ref, hyp)
         sm = SequenceMatcher(None, ref, hyp)
         matches = sum(b.size for b in sm.get_matching_blocks())
-        wer = round(1 - matches / max(len(ref), 1), 4)
+        wer_approx = round(1 - matches / max(len(ref), 1), 4)
 
     results.append({{
         "file": fpath,
@@ -371,15 +450,21 @@ for i, fpath in enumerate(audio_files):
         "duration_s": round(duration_s, 2),
         "elapsed_s": round(elapsed, 3),
         "wer": wer,
+        "wer_approx": wer_approx,
+        "wer_s": wer_s,
+        "wer_d": wer_d,
+        "wer_i": wer_i,
     }})
 
 rtf_list = [r["rtf"] for r in results]
 wer_list = [r["wer"] for r in results if r["wer"] is not None]
+wer_approx_list = [r["wer_approx"] for r in results if r["wer_approx"] is not None]
 print(json.dumps({{
     "n_files": len(results),
     "rtf_mean": round(sum(rtf_list)/len(rtf_list), 4) if rtf_list else 0,
     "rtf_min": round(min(rtf_list), 4) if rtf_list else 0,
     "wer_mean": round(sum(wer_list)/len(wer_list), 4) if wer_list else None,
+    "wer_approx_mean": round(sum(wer_approx_list)/len(wer_approx_list), 4) if wer_approx_list else None,
     "per_file_detail": results,
 }}))
 """

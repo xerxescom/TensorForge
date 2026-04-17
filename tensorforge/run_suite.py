@@ -401,6 +401,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Override config: key=value (key is a BenchmarkConfig field name)",
     )
     parser.add_argument(
+        "--set-file",
+        dest="set_file_kv",
+        action="append",
+        default=[],
+        help="Override config from JSON file content: key=path/to/value.json",
+    )
+    parser.add_argument(
         "--skip", nargs="*", default=[], help="Phase names to skip, e.g. --skip diffusion asr"
     )
     parser.add_argument(
@@ -415,6 +422,15 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"Invalid --set {item!r}. Expected key=value")
         k, v = item.split("=", 1)
         overrides[k.strip()] = v.strip()
+    for item in args.set_file_kv or []:
+        if "=" not in item:
+            raise SystemExit(f"Invalid --set-file {item!r}. Expected key=path")
+        k, path_raw = item.split("=", 1)
+        value_path = Path(path_raw.strip())
+        if not value_path.exists():
+            raise SystemExit(f"Invalid --set-file {item!r}. File not found: {value_path}")
+        raw_json = value_path.read_text(encoding="utf-8").strip()
+        overrides[k.strip()] = f"json:{raw_json}"
 
     skip = args.skip
     if args.only:
