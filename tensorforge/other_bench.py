@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from .collector import BenchmarkRunner, _subprocess_kwargs
+from .error_schema import ensure_structured_error, structured_error
 from .model_manager import model_manager
 from .tf_logger import logger
 
@@ -71,16 +72,36 @@ class DiffusionBenchmark(BenchmarkRunner):
             worker_metrics = json.loads(lines[-1])
         except subprocess.CalledProcessError as e:
             elapsed = time.perf_counter() - t0
+            details = (e.output or b"").decode(errors="ignore")[-500:]
             worker_metrics = {
-                "error": "process_failed",
-                "details": (e.output or b"").decode(errors="ignore")[-500:],
+                "details": details,
+                **structured_error(
+                    error="process_failed",
+                    error_stage="diffusion_worker_subprocess",
+                    trace_text=details,
+                ),
             }
         except subprocess.TimeoutExpired:
             elapsed = time.perf_counter() - t0
-            worker_metrics = {"error": "timeout"}
+            worker_metrics = structured_error(
+                error="timeout",
+                error_type="timeout",
+                error_stage="diffusion_worker_subprocess",
+            )
         except (FileNotFoundError, json.JSONDecodeError) as e:
             elapsed = time.perf_counter() - t0
-            worker_metrics = {"error": "dependency_missing", "details": str(e)}
+            worker_metrics = {
+                "details": str(e),
+                **structured_error(
+                    error="dependency_missing",
+                    error_type="dependency_missing",
+                    error_stage="diffusion_worker_subprocess",
+                    trace_text=str(e),
+                ),
+            }
+        worker_metrics = ensure_structured_error(
+            worker_metrics, error_stage="diffusion_worker_subprocess"
+        )
 
         total_steps = self.n_images * self.n_steps
         it_per_s = total_steps / elapsed if elapsed > 0 else 0
@@ -202,13 +223,23 @@ class CVBenchmark(BenchmarkRunner):
             worker_metrics = json.loads(out.decode().strip().splitlines()[-1])
         except subprocess.CalledProcessError as e:
             elapsed = time.perf_counter() - t0
+            details = (e.output or b"").decode(errors="ignore")[-800:]
             worker_metrics = {
-                "error": "process_failed",
-                "details": (e.output or b"").decode(errors="ignore")[-800:],
+                "details": details,
+                **structured_error(
+                    error="process_failed",
+                    error_stage="cv_worker_subprocess",
+                    trace_text=details,
+                ),
             }
         except Exception as e:
             elapsed = time.perf_counter() - t0
-            worker_metrics = {"error": type(e).__name__}
+            worker_metrics = structured_error(
+                error=type(e).__name__,
+                error_stage="cv_worker_subprocess",
+                trace_text=str(e),
+            )
+        worker_metrics = ensure_structured_error(worker_metrics, error_stage="cv_worker_subprocess")
 
         return {
             "n_frames": self.n_frames,
@@ -308,7 +339,11 @@ class ASRBenchmark(BenchmarkRunner):
             return json.loads(out.decode().strip().splitlines()[-1])
         except Exception as e:
             logger.warning(f"  [warn] ASR worker failed: {e}")
-            return {}
+            return structured_error(
+                error=type(e).__name__,
+                error_stage="asr_worker_subprocess",
+                trace_text=str(e),
+            )
 
     def _synthetic_benchmark(self) -> dict:
         script = f"""
@@ -347,7 +382,14 @@ print(json.dumps({{
             return json.loads(out.decode().strip().splitlines()[-1])
         except Exception as e:
             logger.warning(f"  [warn] Synthetic ASR failed: {e}")
-            return {"note": "asr_not_available"}
+            return {
+                "note": "asr_not_available",
+                **structured_error(
+                    error=type(e).__name__,
+                    error_stage="asr_synthetic_subprocess",
+                    trace_text=str(e),
+                ),
+            }
 
     def _build_script(self) -> str:
         files_repr = repr(self.audio_files)
