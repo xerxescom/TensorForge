@@ -184,7 +184,7 @@ class CVBenchmark(BenchmarkRunner):
         )
         self.n_frames = n_frames
         self.image_size = image_size
-        self.batch_size = batch_size
+        self.batch_size = max(int(batch_size), 1)
 
     def run_task(self) -> dict:
         script = self._build_script()
@@ -234,24 +234,42 @@ model = YOLO("{self.model_name}.pt")
 frame = np.zeros(({self.image_size}, {self.image_size}, 3), dtype=np.uint8)
 
 for _ in range(10):
-    model.predict(frame, imgsz={self.image_size}, device=device, half=(half and device.startswith("cuda")), verbose=False)
+    warmup_batch = [frame] * {self.batch_size}
+    model.predict(warmup_batch, imgsz={self.image_size}, device=device, half=(half and device.startswith("cuda")), verbose=False)
 
-latencies = []
-for _ in range({self.n_frames}):
+batch_latencies = []
+per_frame_latencies = []
+total_frames = {self.n_frames}
+batch_size = {self.batch_size}
+processed_batches = 0
+
+for start in range(0, total_frames, batch_size):
+    current_batch = min(batch_size, total_frames - start)
+    inputs = [frame] * current_batch
     t0 = time.perf_counter()
-    model.predict(frame, imgsz={self.image_size}, device=device, half=(half and device.startswith("cuda")), verbose=False)
-    latencies.append((time.perf_counter() - t0) * 1000)
+    model.predict(inputs, imgsz={self.image_size}, device=device, half=(half and device.startswith("cuda")), verbose=False)
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+    batch_latencies.append(elapsed_ms)
+    per_frame_latencies.append(elapsed_ms / current_batch)
+    processed_batches += 1
 
-lat = sorted(latencies)
+lat = sorted(per_frame_latencies)
 n = len(lat)
+total_ms = sum(batch_latencies)
+
+def pct_idx(total: int, q: float) -> int:
+    return min(max(int(total * q), 0), total - 1)
+
 print(json.dumps({{
     "device": device,
-    "fps": round(1000 / (sum(latencies) / n), 2),
-    "latency_p50_ms": round(lat[int(n * 0.50)], 3),
-    "latency_p95_ms": round(lat[int(n * 0.95)], 3),
-    "latency_p99_ms": round(lat[int(n * 0.99)], 3),
+    "fps": round((total_frames * 1000) / total_ms, 2),
+    "batch_per_s": round((processed_batches * 1000) / total_ms, 2),
+    "latency_p50_ms": round(lat[pct_idx(n, 0.50)], 3),
+    "latency_p95_ms": round(lat[pct_idx(n, 0.95)], 3),
+    "latency_p99_ms": round(lat[pct_idx(n, 0.99)], 3),
     "latency_min_ms": round(lat[0], 3),
     "latency_max_ms": round(lat[-1], 3),
+    "processed_batches": processed_batches,
 }}))
 """
 

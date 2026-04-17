@@ -4,9 +4,11 @@ Configuration manager - loads settings from YAML.
 
 from __future__ import annotations
 
+import json
+import types
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any
+from typing import Any, Union, get_args, get_origin, get_type_hints
 
 import yaml
 
@@ -226,24 +228,95 @@ def _coerce_value(target_type: type, raw: str):
     return raw
 
 
+def _is_optional_type(tp: Any) -> bool:
+    origin = get_origin(tp)
+    if origin in (Union, types.UnionType):
+        return type(None) in get_args(tp)
+    return False
+
+
+def _parse_typed_value(key: str, target_type: Any, raw: str) -> Any:
+    origin = get_origin(target_type)
+    args = get_args(target_type)
+
+    if _is_optional_type(target_type):
+        non_none = [t for t in args if t is not type(None)]
+        if raw.strip().lower() in {"none", "null"}:
+            return None
+        if len(non_none) == 1:
+            return _parse_typed_value(key, non_none[0], raw)
+
+    if raw.startswith("json:"):
+        try:
+            parsed = json.loads(raw[len("json:") :])
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON override for {key}: {e}") from e
+    else:
+        parsed = raw
+
+    if target_type is bool:
+        if not isinstance(parsed, str):
+            raise ValueError(f"{key} expects bool string, got {type(parsed).__name__}")
+        return _parse_bool(parsed)
+    if target_type is int:
+        if not isinstance(parsed, str):
+            raise ValueError(f"{key} expects int string, got {type(parsed).__name__}")
+        return int(parsed)
+    if target_type is float:
+        if not isinstance(parsed, str):
+            raise ValueError(f"{key} expects float string, got {type(parsed).__name__}")
+        return float(parsed)
+    if target_type is str:
+        if not isinstance(parsed, str):
+            raise ValueError(f"{key} expects string, got {type(parsed).__name__}")
+        return parsed
+
+    if origin is list:
+        if isinstance(parsed, str):
+            raise ValueError(
+                f"{key} expects a list. Use json: prefix, e.g. --set {key}=json:[\"a\",\"b\"]"
+            )
+        if not isinstance(parsed, list):
+            raise ValueError(f"{key} expects list, got {type(parsed).__name__}")
+        elem_type = args[0] if args else Any
+        if elem_type in (str, int, float, bool):
+            for idx, item in enumerate(parsed):
+                if not isinstance(item, elem_type):
+                    raise ValueError(
+                        f"{key}[{idx}] expects {elem_type.__name__}, got {type(item).__name__}"
+                    )
+        return parsed
+
+    if origin is dict:
+        if isinstance(parsed, str):
+            raise ValueError(
+                f"{key} expects a dict. Use json: prefix, e.g. --set {key}=json:{{\"k\":\"v\"}}"
+            )
+        if not isinstance(parsed, dict):
+            raise ValueError(f"{key} expects dict, got {type(parsed).__name__}")
+        return parsed
+
+    # Fallback for unsupported annotation shapes.
+    return _coerce_value(type(parsed), parsed) if isinstance(parsed, str) else parsed
+
+
 def apply_overrides(cfg: BenchmarkConfig, overrides: dict[str, str]) -> BenchmarkConfig:
     """
     Apply CLI overrides to an existing config.
 
     Keys are dataclass field names, e.g. `sample_interval_s=0.25` or `network_timeout=600`.
     """
-    allowed = {f.name: f.type for f in fields(BenchmarkConfig)}
+    type_hints = get_type_hints(BenchmarkConfig)
+    allowed = {f.name: type_hints.get(f.name, f.type) for f in fields(BenchmarkConfig)}
     for key, raw in overrides.items():
         if key not in allowed:
             raise KeyError(f"Unknown config key: {key}")
-
-        current = getattr(cfg, key)
-        # If it's optional / union types, coerce based on current runtime value when possible.
-        if current is None:
-            # Best-effort: keep as string when we can't infer.
-            setattr(cfg, key, raw)
-        else:
-            setattr(cfg, key, _coerce_value(type(current), raw))
+        target_type = allowed[key]
+        try:
+            value = _parse_typed_value(key, target_type, raw)
+        except Exception as e:
+            raise ValueError(f"Invalid override for {key!r}: {e}") from e
+        setattr(cfg, key, value)
 
     return cfg
 
