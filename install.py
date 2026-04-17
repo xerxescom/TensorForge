@@ -223,7 +223,7 @@ def main():
     print("\nNext steps:")
     print("1. Run dependency check: python check_deps.py")
     print("2. Test model download: python test_models.py")
-    print("3. Run benchmark: python run_suite.py")
+    print("3. Run benchmark: python -m tensorforge.run_suite")
 
     return True
 
