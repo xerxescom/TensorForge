@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
+
 from .tf_logger import logger
 
 try:
