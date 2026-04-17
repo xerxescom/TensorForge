@@ -51,7 +51,28 @@ def test_summarize_returns_expected_keys():
             mem_clock_mhz=5100.0,
         ),
     ]
-    stats = GPUSampler.summarize(samples)
+    stats = GPUSampler.summarize(samples, window_size=1)
     assert stats["sample_count"] == 2
     assert "gpu_util_%" in stats
     assert stats["gpu_util_%"]["max"] == 90.0
+    assert "p95" in stats["gpu_util_%"]
+
+
+def test_summarize_windowed_matches_non_windowed():
+    t0 = time.time()
+    samples = [
+        GPUSample(
+            timestamp=t0 + i,
+            gpu_util=float(i),
+            mem_used_mb=float(100 + i),
+            mem_total_mb=1000.0,
+            power_w=float(50 + i),
+            temp_c=float(40 + (i % 10)),
+            sm_clock_mhz=float(1000 + i),
+            mem_clock_mhz=5000.0,
+        )
+        for i in range(100)
+    ]
+    stats_a = GPUSampler.summarize(samples, window_size=10)
+    stats_b = GPUSampler.summarize(samples, window_size=1000)
+    assert stats_a == stats_b
