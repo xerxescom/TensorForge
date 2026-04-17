@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from tensorforge.model_manager import ModelDownloader
 
@@ -91,3 +93,20 @@ def test_full_scan_fallback_rebuilds_metadata(tmp_path):
     assert payload["model_x"]["size_bytes"] >= 64
     assert payload["model_y"]["size_bytes"] >= 32
     assert payload["model_x"]["source"] == "scan_fallback"
+
+
+def test_get_lock_returns_single_instance_under_concurrency(tmp_path):
+    d = ModelDownloader(cache_dir=str(tmp_path))
+    model_id = "org/repo"
+    n_workers = 32
+    barrier = threading.Barrier(n_workers)
+
+    def _get():
+        barrier.wait()
+        return d.get_lock(model_id)
+
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        locks = list(pool.map(lambda _: _get(), range(n_workers)))
+
+    first = locks[0]
+    assert all(lock is first for lock in locks)

@@ -36,6 +36,7 @@ class ModelDownloader:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(exist_ok=True)
         self.download_locks: dict[str, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
         self.mirrors = [*list(config.network_preferred_endpoints), "https://cdn-lfs.huggingface.co"]
         self.network_config = NetworkConfig(
             timeout=config.network_timeout,
@@ -109,9 +110,15 @@ class ModelDownloader:
             self._cache_metadata.pop(model_key, None)
 
     def get_lock(self, model_id: str) -> threading.Lock:
-        if model_id not in self.download_locks:
-            self.download_locks[model_id] = threading.Lock()
-        return self.download_locks[model_id]
+        lock = self.download_locks.get(model_id)
+        if lock is not None:
+            return lock
+        with self._locks_guard:
+            lock = self.download_locks.get(model_id)
+            if lock is None:
+                lock = threading.Lock()
+                self.download_locks[model_id] = lock
+        return lock
 
     def is_model_cached(self, model_id: str) -> bool:
         model_key = self._model_cache_key(model_id)
