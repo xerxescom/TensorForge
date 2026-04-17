@@ -194,15 +194,32 @@ class GPUSampler:
         if len(samples) <= max_samples:
             return samples
 
+        # Keep boundary samples to preserve full benchmark time window.
         result = [samples[0], samples[-1]]
-        gpu_utils = [s.gpu_util for s in samples]
-        power_vals = [s.power_w for s in samples]
-        temp_vals = [s.temp_c for s in samples]
+
+        def _extreme_indices(metric_getter) -> tuple[int, int]:
+            # Single pass: avoid allocating a full metric list for each dimension.
+            min_idx = max_idx = 0
+            min_val = max_val = metric_getter(samples[0])
+            for idx, sample in enumerate(samples[1:], start=1):
+                value = metric_getter(sample)
+                if value < min_val:
+                    min_val = value
+                    min_idx = idx
+                if value > max_val:
+                    max_val = value
+                    max_idx = idx
+            return min_idx, max_idx
 
         peak_indices: set[int] = set()
-        for values in [gpu_utils, power_vals, temp_vals]:
-            peak_indices.add(values.index(max(values)))
-            peak_indices.add(values.index(min(values)))
+        for getter in (
+            lambda s: s.gpu_util,
+            lambda s: s.power_w,
+            lambda s: s.temp_c,
+        ):
+            # Preserve both peaks and troughs for key thermal/power/load signals.
+            min_idx, max_idx = _extreme_indices(getter)
+            peak_indices.update((min_idx, max_idx))
 
         remaining_slots = max_samples - len(result) - len(peak_indices)
         if remaining_slots > 0:
@@ -216,6 +233,7 @@ class GPUSampler:
             if len(result) < max_samples:
                 result.append(samples[idx])
 
+        # Return by timestamp to keep downstream JSON/CSV consumers deterministic.
         return sorted(result, key=lambda x: x.timestamp)
 
     def stop(self, max_raw_samples: int = 1000) -> list[GPUSample]:

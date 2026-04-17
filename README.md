@@ -31,6 +31,12 @@ TensorForge/
 └── 📋 README.md             # 项目说明文档
 ```
 
+### 结构说明（建议开发时遵循）
+
+- **核心实现统一放在 `tensorforge/` 包内**，这里是主维护路径。  
+- **根目录同名文件（如 `collector.py`、`run_suite.py`）是兼容层**，用于兼容旧命令与旧导入方式。  
+- 新功能请优先修改 `tensorforge/*.py`，避免在兼容层重复实现逻辑，减少分叉维护成本。
+
 ## 🚀 快速开始
 
 ### 1. 环境检查
@@ -601,4 +607,3 @@ python run_suite.py --config config.yaml --set sample_interval_s=0.25 --set netw
 ---
 
 **🚀 TensorForge - 让 GPU 基准测试变得简单而强大！**
-
