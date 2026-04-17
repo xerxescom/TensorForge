@@ -34,6 +34,13 @@ def test_final_report_schema_minimal(tmp_path):
     assert "config_snapshot" in report
     assert "phases" in report
     assert isinstance(report["phases"], list)
+    assert "error_summary" in report
+    assert report["error_summary"] == {
+        "download_failed": 0,
+        "oom": 0,
+        "dependency_missing": 0,
+        "timeout": 0,
+    }
 
     cfg_path = tmp_path / "config_resolved.json"
     assert cfg_path.exists()

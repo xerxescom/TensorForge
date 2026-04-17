@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from .collector import BenchmarkRunner, _subprocess_kwargs
+from .error_schema import classify_error_type, short_trace
 from .tf_logger import logger
 
 
@@ -207,6 +208,9 @@ class LLMBenchmark(BenchmarkRunner):
             "tokens_generated": tokens_generated,
             "tokens_estimated": tokens_estimated,
             "error": error,
+            "error_type": classify_error_type(str(error)) if error else None,
+            "error_stage": "llm_subprocess" if error else None,
+            "short_trace": short_trace(str(error)) if error else None,
         }
 
 

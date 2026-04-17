@@ -17,6 +17,7 @@ from typing import Any
 
 from .collector import GPUSampler, _subprocess_kwargs
 from .config_manager import ConfigManager, apply_overrides
+from .error_schema import classify_error_type, short_trace, structured_error
 from .logging_utils import configure_logging
 from .tf_logger import logger
 
@@ -118,7 +119,13 @@ class ConcurrentStressTest:
             elif t_type == "diffusion":
                 metrics.update(self._timed_diffusion(model, duration))
         except Exception as e:
-            metrics["error"] = str(e)
+            metrics.update(
+                structured_error(
+                    error=e,
+                    error_stage=f"concurrent_{t_type}_subprocess",
+                    trace_text=str(e),
+                )
+            )
 
         results[idx] = metrics
 
@@ -217,8 +224,12 @@ print(json.dumps({{
                 **_subprocess_kwargs(),
             )
             return json.loads(out.decode().strip().splitlines()[-1])
-        except Exception:
-            return {}
+        except Exception as e:
+            return structured_error(
+                error=type(e).__name__,
+                error_stage="concurrent_diffusion_subprocess",
+                trace_text=str(e),
+            )
 
     def _run_baselines(self) -> dict:
         logger.info("[Concurrent] Collecting single-task baselines ...")
@@ -368,16 +379,46 @@ class FullBenchmarkSuite:
                 self.all_results.append({"phase": phase_name, "result": result})
             except Exception as e:
                 logger.exception(f"[Suite] ERROR in {phase_name}: {e}")
-                self.all_results.append({"phase": phase_name, "error": str(e)})
+                self.all_results.append(
+                    {
+                        "phase": phase_name,
+                        "error": str(e),
+                        "error_type": classify_error_type(str(e)),
+                        "error_stage": f"suite_phase_{phase_name}",
+                        "short_trace": short_trace(str(e)),
+                    }
+                )
 
         self._write_final_report()
 
+    @staticmethod
+    def _collect_error_counts(payload: Any, counters: dict[str, int]):
+        if isinstance(payload, dict):
+            err = payload.get("error")
+            if err:
+                err_type = payload.get("error_type") or classify_error_type(str(err))
+                if err_type in counters:
+                    counters[err_type] += 1
+            for value in payload.values():
+                FullBenchmarkSuite._collect_error_counts(value, counters)
+        elif isinstance(payload, list):
+            for item in payload:
+                FullBenchmarkSuite._collect_error_counts(item, counters)
+
     def _write_final_report(self):
+        error_counts = {
+            "download_failed": 0,
+            "oom": 0,
+            "dependency_missing": 0,
+            "timeout": 0,
+        }
+        self._collect_error_counts(self.all_results, error_counts)
         report = {
             "gpu_name": self.gpu_name,
             "benchmark_date": datetime.now().isoformat(timespec="seconds"),
             "config_snapshot": asdict(self.config),
             "phases": self.all_results,
+            "error_summary": error_counts,
         }
         report_path = self.output_dir / "final_report.json"
         report_path.write_text(
