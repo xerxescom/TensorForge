@@ -83,6 +83,7 @@ class BenchmarkConfig:
     cv_model: str = "yolov8n"
     cv_precision: str = "fp16"
     cv_image_size: int = 640
+    cv_batch_size: int = 1
 
     asr_model: str = "base"
     asr_precision: str = "float16"
@@ -205,6 +206,7 @@ class ConfigManager:
             cv_model=cv_model_cfg.get("default", "yolov8n"),
             cv_precision=cv_model_cfg.get("precision", "fp16"),
             cv_image_size=cv_model_cfg.get("image_size", 640),
+            cv_batch_size=cv_model_cfg.get("batch_size", 1),
             asr_model=asr_model_cfg.get("default", "base"),
             asr_precision=asr_model_cfg.get("precision", "float16"),
             concurrent_duration_s=concurrent_test.get("duration_s", 60),
@@ -343,6 +345,7 @@ def _validate_critical_fields(cfg: BenchmarkConfig):
     _ge("warmup_s", float(cfg.warmup_s), 0.0)
     _gt("max_raw_samples", float(cfg.max_raw_samples), 0.0)
     _gt("concurrent_duration_s", float(cfg.concurrent_duration_s), 0.0)
+    _gt("cv_batch_size", float(cfg.cv_batch_size), 0.0)
     _in("stats_precision_mode", cfg.stats_precision_mode, {"exact", "approximate"})
     _in(
         "concurrent_measurement_mode",
