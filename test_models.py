@@ -4,17 +4,13 @@
 测试新的模型管理系统
 """
 
-import sys
 import time
 from pathlib import Path
 
-# 添加当前目录到路径
-sys.path.insert(0, str(Path(__file__).parent))
-
-from llm_bench import LLMBenchmark
-from model_manager import model_manager
-from network_optimizer import download_optimizer
-from other_bench import DiffusionBenchmark
+from tensorforge.llm_bench import LLMBenchmark
+from tensorforge.model_manager import model_manager
+from tensorforge.network_optimizer import download_optimizer
+from tensorforge.other_bench import DiffusionBenchmark
 
 
 def test_model_download():

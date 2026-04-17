@@ -12,15 +12,15 @@
 
 ```
 TensorForge/
-├── 📊 collector.py           # GPU 采样器 + 基准测试基类（跨平台核心）
-├── 🤖 llm_bench.py          # LLM 推理 + 上下文长度衰减测试
-├── 🎨 other_bench.py        # Diffusion / CV / ASR 测试
+├── 📊 tensorforge/collector.py      # GPU 采样器 + 基准测试基类（跨平台核心）
+├── 🤖 tensorforge/llm_bench.py      # LLM 推理 + 上下文长度衰减测试
+├── 🎨 tensorforge/other_bench.py    # Diffusion / CV / ASR 测试
 ├── 📈 generate_report.py    # 生成 HTML 可视化报告
-├── 🚀 run_suite.py          # 完整套件入口 + 并发压测
+├── 🚀 tensorforge/run_suite.py      # 完整套件入口 + 并发压测
 ├── ⚙️ config.yaml           # 统一配置文件
-├── 📦 model_manager.py      # 智能模型下载和缓存管理
-├── 🌐 network_optimizer.py   # 网络连接优化器
-├── 🛡️ error_handler.py      # 错误处理和重试机制
+├── 📦 tensorforge/model_manager.py  # 智能模型下载和缓存管理
+├── 🌐 tensorforge/network_optimizer.py # 网络连接优化器
+├── 🛡️ tensorforge/error_handler.py  # 错误处理和重试机制
 ├── 🔧 check_deps.py          # 依赖检查脚本
 ├── 🧪 test_models.py        # 模型测试脚本
 ├── 💻 install.py             # 智能安装脚本
@@ -33,9 +33,8 @@ TensorForge/
 
 ### 结构说明（建议开发时遵循）
 
-- **核心实现统一放在 `tensorforge/` 包内**，这里是主维护路径。  
-- **根目录同名文件（如 `collector.py`、`run_suite.py`）是兼容层**，用于兼容旧命令与旧导入方式。  
-- 新功能请优先修改 `tensorforge/*.py`，避免在兼容层重复实现逻辑，减少分叉维护成本。
+- **核心实现统一放在 `tensorforge/` 包内**，这里是唯一维护路径。  
+- 请统一使用模块路径导入（如 `from tensorforge.llm_bench import LLMBenchmark`）与模块方式运行（如 `python -m tensorforge.run_suite`）。
 
 ## 🚀 快速开始
 
@@ -106,16 +105,16 @@ python check_deps.py
 
 ```bash
 # Windows（PowerShell 或 CMD）
-python run_suite.py --gpu-name "RTX 4070" --output-dir results\rtx4070
+python -m tensorforge.run_suite --gpu-name "RTX 4070" --output-dir results\rtx4070
 
 # Linux
-python run_suite.py --gpu-name "RTX 4070" --output-dir results/rtx4070
+python -m tensorforge.run_suite --gpu-name "RTX 4070" --output-dir results/rtx4070
 
 # 只测 LLM
-python run_suite.py --only llm llm_fp16 llm_context_scale
+python -m tensorforge.run_suite --only llm llm_fp16 llm_context_scale
 
 # 跳过耗时的 Diffusion
-python run_suite.py --skip diffusion concurrent
+python -m tensorforge.run_suite --skip diffusion concurrent
 ```
 
 ### 6. 生成 HTML 报告
@@ -275,8 +274,8 @@ models:
 ### 单独调用某个测试
 
 ```python
-from llm_bench import LLMBenchmark
-from other_bench import DiffusionBenchmark
+from tensorforge.llm_bench import LLMBenchmark
+from tensorforge.other_bench import DiffusionBenchmark
 
 # LLM 推理测试
 llm_bench = LLMBenchmark(
@@ -301,7 +300,7 @@ result = diffusion_bench.run()
 ### 模型管理
 
 ```python
-from model_manager import model_manager
+from tensorforge.model_manager import model_manager
 
 # 下载模型（自动缓存）
 model_path = model_manager.get_model_path("sdxl-turbo")
@@ -321,13 +320,13 @@ model_manager.clear_cache("sdxl-turbo")
 ### 网络优化
 
 ```python
-from network_optimizer import download_optimizer
+from tensorforge.network_optimizer import download_optimizer
 
 # 自动设置网络优化
 download_optimizer.setup()
 
 # 测试连接
-from network_optimizer import NetworkOptimizer
+from tensorforge.network_optimizer import NetworkOptimizer
 optimizer = NetworkOptimizer()
 connectivity = optimizer.test_connectivity()
 best_endpoint = optimizer.get_best_endpoint()
@@ -394,7 +393,7 @@ pip cache purge
 #### 2. 模型下载超时
 ```bash
 # 检查网络连接
-python network_optimizer.py
+python -m tensorforge.network_optimizer
 
 # 使用代理
 # 编辑 config.yaml:
@@ -404,7 +403,7 @@ python network_optimizer.py
 #   proxy_port: 7890
 
 # 手动清理缓存重试
-python -c "from model_manager import model_manager; model_manager.clear_cache()"
+python -c "from tensorforge.model_manager import model_manager; model_manager.clear_cache()"
 
 # 使用镜像站
 export HF_ENDPOINT=https://hf-mirror.com
@@ -475,7 +474,7 @@ logging.basicConfig(level=logging.DEBUG)
 python test_models.py --debug
 
 # 检查配置
-python -c "from config_manager import config_manager; print(config_manager.load_config())"
+python -c "from tensorforge.config_manager import config_manager; print(config_manager.load_config())"
 ```
 
 ### 环境变量设置
@@ -542,13 +541,13 @@ pre-commit install
 
 ### 代码结构
 
-- **collector.py**: 核心 GPU 采样和基准测试基类
-- **model_manager.py**: 模型下载和缓存管理
-- **network_optimizer.py**: 网络连接优化
-- **error_handler.py**: 错误处理和重试机制
-- **config_manager.py**: 配置文件管理
-- **llm_bench.py**: LLM 推理测试
-- **other_bench.py**: 图像生成、CV、语音测试
+- **tensorforge/collector.py**: 核心 GPU 采样和基准测试基类
+- **tensorforge/model_manager.py**: 模型下载和缓存管理
+- **tensorforge/network_optimizer.py**: 网络连接优化
+- **tensorforge/error_handler.py**: 错误处理和重试机制
+- **tensorforge/config_manager.py**: 配置文件管理
+- **tensorforge/llm_bench.py**: LLM 推理测试
+- **tensorforge/other_bench.py**: 图像生成、CV、语音测试
 - **install.py**: 智能安装脚本
 - **check_deps.py**: 依赖检查工具
 
@@ -557,7 +556,7 @@ pre-commit install
 1. 继承 `BenchmarkRunner` 基类
 2. 实现 `run_task()` 方法
 3. 返回业务指标字典
-4. 在 `run_suite.py` 中注册新测试
+4. 在 `tensorforge/run_suite.py` 中注册新测试
 
 ### 代码规范
 
@@ -568,10 +567,10 @@ pre-commit install
 
 ### CLI 配置覆盖（可复现实验）
 
-`run_suite.py` 支持从指定配置文件加载，并用命令行覆盖部分字段；最终解析结果会写入输出目录的 `config_resolved.json`。
+`tensorforge/run_suite.py` 支持从指定配置文件加载，并用命令行覆盖部分字段；最终解析结果会写入输出目录的 `config_resolved.json`。
 
 ```bash
-python run_suite.py --config config.yaml --set sample_interval_s=0.25 --set network_timeout=600
+python -m tensorforge.run_suite --config config.yaml --set sample_interval_s=0.25 --set network_timeout=600
 ```
 
 ---
