@@ -13,6 +13,7 @@ def test_cv_worker_script_reports_effective_batch_size(tmp_path):
         output_dir=str(tmp_path),
         warmup_s=0,
     )
-    script = bench._build_script()
-    assert '"effective_batch_size"' in script
-    assert "configured_batch_size" in script
+    cmd = bench._build_worker_command()
+    assert "tensorforge.cv_bench_worker" in cmd
+    assert "--n-frames" in cmd
+    assert cmd[cmd.index("--n-frames") + 1] == "10"

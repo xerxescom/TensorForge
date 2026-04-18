@@ -8,7 +8,6 @@ import json
 import subprocess
 import sys
 import time
-from pathlib import Path
 from typing import ClassVar
 
 from .collector import BenchmarkRunner, _subprocess_kwargs
@@ -55,14 +54,11 @@ class DiffusionBenchmark(BenchmarkRunner):
             logger.warning(f"[diffusion] Model download failed: {e}")
 
     def run_task(self) -> dict:
-        script = self._build_script()
-        script_path = Path(self.output_dir) / "_diffusion_worker.py"
-        script_path.write_text(script, "utf-8")
-
         t0 = time.perf_counter()
         try:
+            cmd = self._build_worker_command()
             out = subprocess.check_output(
-                [sys.executable, str(script_path)],
+                cmd,
                 stderr=subprocess.STDOUT,
                 timeout=900,
                 **_subprocess_kwargs(),
@@ -117,77 +113,29 @@ class DiffusionBenchmark(BenchmarkRunner):
             **worker_metrics,
         }
 
-    def _build_script(self) -> str:
-        dtype_map = {"fp16": "torch.float16", "fp32": "torch.float32", "bf16": "torch.bfloat16"}
-        dtype = dtype_map.get(self.precision, "torch.float16")
-        prompts_repr = repr(self.BENCH_PROMPTS)
-        model_source = (
-            f'"{self.local_model_path}"' if self.local_model_path else f'"{self.model_name}"'
-        )
-
-        cache_dir = str(model_manager.downloader.cache_dir)
-        local_only = "True" if self.local_model_path else "False"
-
-        return f"""
-import json
-import os
-import sys
-import time
-
-import torch
-
-os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
-os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
-os.environ['TRANSFORMERS_CACHE'] = {cache_dir!r}
-os.environ['HF_HOME'] = {cache_dir!r}
-
-try:
-    from diffusers import AutoPipelineForText2Image
-except Exception as e:
-    print(json.dumps({{"error": "diffusers_not_available", "details": str(e)}}))
-    sys.exit(1)
-
-pipe = AutoPipelineForText2Image.from_pretrained(
-    {model_source},
-    torch_dtype={dtype},
-    variant="fp16",
-    local_files_only={local_only},
-    resume_download=True,
-)
-pipe = pipe.to("cuda")
-
-prompts = {prompts_repr}
-n = {self.n_images}
-seed = {self.seed}
-steps = {self.n_steps}
-generator = torch.Generator("cuda").manual_seed(seed)
-
-times = []
-success_count = 0
-for i in range(n):
-    prompt = prompts[i % len(prompts)]
-    t0 = time.perf_counter()
-    try:
-        _ = pipe(prompt=prompt, num_inference_steps=steps, generator=generator).images[0]
-        times.append(time.perf_counter() - t0)
-        success_count += 1
-    except Exception:
-        times.append(time.perf_counter() - t0)
-
-if times:
-    result = {{
-        "per_image_s_mean": round(sum(times)/len(times), 3),
-        "per_image_s_min": round(min(times), 3),
-        "per_image_s_max": round(max(times), 3),
-        "success_count": success_count,
-        "total_attempts": n,
-        "success_rate": round(success_count / n, 4),
-    }}
-else:
-    result = {{"error": "no_successful_generations"}}
-
-print(json.dumps(result))
-"""
+    def _build_worker_command(self) -> list[str]:
+        cmd = [
+            sys.executable,
+            "-m",
+            "tensorforge.diffusion_bench_worker",
+            "--model",
+            self.model_name,
+            "--precision",
+            self.precision,
+            "--n-images",
+            str(self.n_images),
+            "--n-steps",
+            str(self.n_steps),
+            "--seed",
+            str(self.seed),
+            "--prompts-json",
+            json.dumps(self.BENCH_PROMPTS, ensure_ascii=False),
+            "--cache-dir",
+            str(model_manager.downloader.cache_dir),
+        ]
+        if self.local_model_path:
+            cmd.extend(["--local-model-path", self.local_model_path, "--local-files-only"])
+        return cmd
 
 
 class CVBenchmark(BenchmarkRunner):
@@ -208,13 +156,11 @@ class CVBenchmark(BenchmarkRunner):
         self.batch_size = max(int(batch_size), 1)
 
     def run_task(self) -> dict:
-        script = self._build_script()
-        script_path = Path(self.output_dir) / "_cv_worker.py"
-        script_path.write_text(script, "utf-8")
         t0 = time.perf_counter()
         try:
+            cmd = self._build_worker_command()
             out = subprocess.check_output(
-                [sys.executable, str(script_path)],
+                cmd,
                 stderr=subprocess.STDOUT,
                 timeout=300,
                 **_subprocess_kwargs(),
@@ -250,62 +196,22 @@ class CVBenchmark(BenchmarkRunner):
             **worker_metrics,
         }
 
-    def _build_script(self) -> str:
-        half = "True" if self.precision == "fp16" else "False"
-        return f"""
-import json
-import time
-
-import numpy as np
-import torch
-from ultralytics import YOLO
-
-half = {half}
-device = "cuda:0" if torch.cuda.is_available() else "cpu"
-model = YOLO("{self.model_name}.pt")
-frame = np.zeros(({self.image_size}, {self.image_size}, 3), dtype=np.uint8)
-
-for _ in range(10):
-    warmup_batch = [frame] * {self.batch_size}
-    model.predict(warmup_batch, imgsz={self.image_size}, device=device, half=(half and device.startswith("cuda")), verbose=False)
-
-batch_latencies = []
-per_frame_latencies = []
-total_frames = {self.n_frames}
-batch_size = {self.batch_size}
-processed_batches = 0
-
-for start in range(0, total_frames, batch_size):
-    current_batch = min(batch_size, total_frames - start)
-    inputs = [frame] * current_batch
-    t0 = time.perf_counter()
-    model.predict(inputs, imgsz={self.image_size}, device=device, half=(half and device.startswith("cuda")), verbose=False)
-    elapsed_ms = (time.perf_counter() - t0) * 1000
-    batch_latencies.append(elapsed_ms)
-    per_frame_latencies.append(elapsed_ms / current_batch)
-    processed_batches += 1
-
-lat = sorted(per_frame_latencies)
-n = len(lat)
-total_ms = sum(batch_latencies)
-
-def pct_idx(total: int, q: float) -> int:
-    return min(max(int(total * q), 0), total - 1)
-
-print(json.dumps({{
-    "device": device,
-    "configured_batch_size": batch_size,
-    "effective_batch_size": round(total_frames / max(processed_batches, 1), 3),
-    "fps": round((total_frames * 1000) / total_ms, 2),
-    "batch_per_s": round((processed_batches * 1000) / total_ms, 2),
-    "latency_p50_ms": round(lat[pct_idx(n, 0.50)], 3),
-    "latency_p95_ms": round(lat[pct_idx(n, 0.95)], 3),
-    "latency_p99_ms": round(lat[pct_idx(n, 0.99)], 3),
-    "latency_min_ms": round(lat[0], 3),
-    "latency_max_ms": round(lat[-1], 3),
-    "processed_batches": processed_batches,
-}}))
-"""
+    def _build_worker_command(self) -> list[str]:
+        return [
+            sys.executable,
+            "-m",
+            "tensorforge.cv_bench_worker",
+            "--model",
+            self.model_name,
+            "--precision",
+            self.precision,
+            "--n-frames",
+            str(self.n_frames),
+            "--image-size",
+            str(self.image_size),
+            "--batch-size",
+            str(self.batch_size),
+        ]
 
 
 class ASRBenchmark(BenchmarkRunner):
@@ -329,12 +235,10 @@ class ASRBenchmark(BenchmarkRunner):
         if not self.audio_files:
             return self._synthetic_benchmark()
 
-        script = self._build_script()
-        script_path = Path(self.output_dir) / "_asr_worker.py"
-        script_path.write_text(script, "utf-8")
         try:
+            cmd = self._build_worker_command(synthetic=False)
             out = subprocess.check_output(
-                [sys.executable, str(script_path)],
+                cmd,
                 stderr=subprocess.STDOUT,
                 timeout=600,
                 **_subprocess_kwargs(),
@@ -349,35 +253,10 @@ class ASRBenchmark(BenchmarkRunner):
             )
 
     def _synthetic_benchmark(self) -> dict:
-        script = f"""
-import json
-import time
-
-import numpy as np
-from faster_whisper import WhisperModel
-
-model = WhisperModel("{self.model_name}", device="{self.device}", compute_type="{self.precision}")
-audio = np.random.randn(5 * 16000).astype(np.float32)
-latencies = []
-for _ in range(5):
-    t0 = time.perf_counter()
-    segs, _ = model.transcribe(audio, language="en")
-    list(segs)
-    latencies.append(time.perf_counter() - t0)
-
-mean_lat = sum(latencies) / len(latencies)
-print(json.dumps({{
-    "rtf": round(mean_lat / 5.0, 4),
-    "latency_mean_s": round(mean_lat, 3),
-    "audio_duration_s": 5.0,
-    "note": "synthetic_audio_benchmark",
-}}))
-"""
-        p = Path(self.output_dir) / "_asr_synth.py"
-        p.write_text(script, "utf-8")
         try:
+            cmd = self._build_worker_command(synthetic=True)
             out = subprocess.check_output(
-                [sys.executable, str(p)],
+                cmd,
                 stderr=subprocess.STDOUT,
                 timeout=120,
                 **_subprocess_kwargs(),
@@ -394,122 +273,27 @@ print(json.dumps({{
                 ),
             }
 
-    def _build_script(self) -> str:
-        files_repr = repr(self.audio_files)
-        truths_repr = repr(self.ground_truths)
-        return f"""
-import json
-import time
-
-import soundfile as sf
-from difflib import SequenceMatcher
-from faster_whisper import WhisperModel
-
-model = WhisperModel("{self.model_name}", device="{self.device}", compute_type="{self.precision}")
-audio_files = {files_repr}
-ground_truths = {truths_repr}
-
-def levenshtein_wer(ref_words, hyp_words):
-    n = len(ref_words)
-    m = len(hyp_words)
-    dp = [[0] * (m + 1) for _ in range(n + 1)]
-    op = [[""] * (m + 1) for _ in range(n + 1)]
-
-    for r in range(1, n + 1):
-        dp[r][0] = r
-        op[r][0] = "D"
-    for c in range(1, m + 1):
-        dp[0][c] = c
-        op[0][c] = "I"
-
-    for r in range(1, n + 1):
-        for c in range(1, m + 1):
-            if ref_words[r - 1] == hyp_words[c - 1]:
-                dp[r][c] = dp[r - 1][c - 1]
-                op[r][c] = "E"
-            else:
-                sub_cost = dp[r - 1][c - 1] + 1
-                del_cost = dp[r - 1][c] + 1
-                ins_cost = dp[r][c - 1] + 1
-                best = min(sub_cost, del_cost, ins_cost)
-                dp[r][c] = best
-                if best == sub_cost:
-                    op[r][c] = "S"
-                elif best == del_cost:
-                    op[r][c] = "D"
-                else:
-                    op[r][c] = "I"
-
-    s = d = ins = 0
-    r, c = n, m
-    while r > 0 or c > 0:
-        move = op[r][c] if r >= 0 and c >= 0 else ""
-        if move in ("E", "S"):
-            if move == "S":
-                s += 1
-            r -= 1
-            c -= 1
-        elif move == "D":
-            d += 1
-            r -= 1
-        elif move == "I":
-            ins += 1
-            c -= 1
+    def _build_worker_command(self, *, synthetic: bool) -> list[str]:
+        cmd = [
+            sys.executable,
+            "-m",
+            "tensorforge.asr_bench_worker",
+            "--model",
+            self.model_name,
+            "--precision",
+            self.precision,
+            "--device",
+            self.device,
+        ]
+        if synthetic:
+            cmd.append("--synthetic")
         else:
-            if r > 0:
-                d += 1
-                r -= 1
-            elif c > 0:
-                ins += 1
-                c -= 1
-
-    denom = max(n, 1)
-    wer = round((s + d + ins) / denom, 4)
-    return wer, s, d, ins
-
-results = []
-for i, fpath in enumerate(audio_files):
-    audio, sr = sf.read(fpath)
-    duration_s = len(audio) / sr
-
-    t0 = time.perf_counter()
-    segs, info = model.transcribe(fpath, language="en")
-    transcript = " ".join(s.text for s in segs)
-    elapsed = time.perf_counter() - t0
-
-    rtf = round(elapsed / duration_s, 4) if duration_s > 0 else 0
-    wer = None
-    wer_approx = None
-    wer_s = wer_d = wer_i = None
-    if i < len(ground_truths):
-        ref = ground_truths[i].lower().split()
-        hyp = transcript.lower().split()
-        wer, wer_s, wer_d, wer_i = levenshtein_wer(ref, hyp)
-        sm = SequenceMatcher(None, ref, hyp)
-        matches = sum(b.size for b in sm.get_matching_blocks())
-        wer_approx = round(1 - matches / max(len(ref), 1), 4)
-
-    results.append({{
-        "file": fpath,
-        "rtf": rtf,
-        "duration_s": round(duration_s, 2),
-        "elapsed_s": round(elapsed, 3),
-        "wer": wer,
-        "wer_approx": wer_approx,
-        "wer_s": wer_s,
-        "wer_d": wer_d,
-        "wer_i": wer_i,
-    }})
-
-rtf_list = [r["rtf"] for r in results]
-wer_list = [r["wer"] for r in results if r["wer"] is not None]
-wer_approx_list = [r["wer_approx"] for r in results if r["wer_approx"] is not None]
-print(json.dumps({{
-    "n_files": len(results),
-    "rtf_mean": round(sum(rtf_list)/len(rtf_list), 4) if rtf_list else 0,
-    "rtf_min": round(min(rtf_list), 4) if rtf_list else 0,
-    "wer_mean": round(sum(wer_list)/len(wer_list), 4) if wer_list else None,
-    "wer_approx_mean": round(sum(wer_approx_list)/len(wer_approx_list), 4) if wer_approx_list else None,
-    "per_file_detail": results,
-}}))
-"""
+            cmd.extend(
+                [
+                    "--audio-files-json",
+                    json.dumps(self.audio_files, ensure_ascii=False),
+                    "--ground-truths-json",
+                    json.dumps(self.ground_truths, ensure_ascii=False),
+                ]
+            )
+        return cmd
