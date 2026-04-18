@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from tensorforge.other_bench import ASRBenchmark, CVBenchmark
+import subprocess
+
+from tensorforge.other_bench import ASRBenchmark, CVBenchmark, DiffusionBenchmark
 
 
 def test_cv_benchmark_batch_size_is_clamped():
@@ -26,3 +28,25 @@ def test_asr_benchmark_worker_script_includes_levenshtein_wer_and_compat_field()
     assert "tensorforge.asr_bench_worker" in cmd
     assert "--audio-files-json" in cmd
     assert "--ground-truths-json" in cmd
+
+
+def test_asr_worker_called_process_error_has_stage_and_details(monkeypatch):
+    bench = ASRBenchmark(audio_files=["a.wav"], output_dir="results/test")
+
+    def _raise_called_process_error(*_args, **_kwargs):
+        raise subprocess.CalledProcessError(2, ["python"], output=b"traceback: boom")
+
+    monkeypatch.setattr(subprocess, "check_output", _raise_called_process_error)
+    result = bench.run_task()
+    assert result["error_stage"] == "asr_worker_called_process"
+    assert result["returncode"] == 2
+    assert "boom" in result["details"]
+
+
+def test_diffusion_worker_invalid_output_sets_parse_stage(monkeypatch):
+    bench = DiffusionBenchmark(output_dir="results/test", local_model_path="/tmp/model")
+
+    monkeypatch.setattr(subprocess, "check_output", lambda *_args, **_kwargs: b"not-json")
+    result = bench.run_task()
+    assert result["error_stage"] == "diffusion_worker_parse_output"
+    assert "not-json" in result["details"]
