@@ -16,8 +16,6 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
-
 from .tf_logger import logger
 
 try:
@@ -351,6 +349,9 @@ class GPUSampler:
         def _p95(values: list[float]) -> float:
             if np is not None:
                 return float(np.percentile(values, 95))
+            logger.debug(
+                "[collector] NumPy unavailable; using pure-Python percentile fallback for p95."
+            )
             sorted_values = sorted(values)
             idx = min(max(int(len(sorted_values) * 0.95), 0), len(sorted_values) - 1)
             return float(sorted_values[idx])
