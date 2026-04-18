@@ -4,6 +4,7 @@ Model download and cache management.
 
 from __future__ import annotations
 
+import atexit
 import json
 import shutil
 import threading
@@ -57,6 +58,12 @@ class ModelDownloader:
         self.metadata_path = self.cache_dir / ".cache_metadata.json"
         self._metadata_lock = threading.Lock()
         self._cache_metadata = self._load_cache_metadata()
+        self._metadata_dirty = False
+        self._metadata_pending_updates = 0
+        self._metadata_flush_interval_sec = 5.0
+        self._metadata_flush_batch_updates = 50
+        self._last_metadata_flush_ts = time.time()
+        atexit.register(self.flush_cache_metadata)
 
     def _load_cache_metadata(self) -> dict[str, dict]:
         if not self.metadata_path.exists():
@@ -69,12 +76,26 @@ class ModelDownloader:
             logger.warning(f"[cache] Failed to load metadata: {e}")
         return {}
 
-    def _save_cache_metadata(self):
+    def _save_cache_metadata(self, force: bool = True) -> bool:
         with self._metadata_lock:
+            if not force:
+                if not self._metadata_dirty:
+                    return False
+                now = time.time()
+                should_flush = (
+                    (now - self._last_metadata_flush_ts) >= self._metadata_flush_interval_sec
+                    or self._metadata_pending_updates >= self._metadata_flush_batch_updates
+                )
+                if not should_flush:
+                    return False
             self.metadata_path.write_text(
                 json.dumps(self._cache_metadata, indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
+            self._metadata_dirty = False
+            self._metadata_pending_updates = 0
+            self._last_metadata_flush_ts = time.time()
+            return True
 
     @staticmethod
     def _model_cache_key(model_id: str) -> str:
@@ -104,10 +125,20 @@ class ModelDownloader:
         if verified:
             entry["last_verified_ts"] = now
         self._cache_metadata[model_key] = entry
+        self._metadata_dirty = True
+        self._metadata_pending_updates += 1
 
     def _remove_model_metadata(self, model_key: str):
         if model_key in self._cache_metadata:
             self._cache_metadata.pop(model_key, None)
+            self._metadata_dirty = True
+            self._metadata_pending_updates += 1
+
+    def flush_cache_metadata(self):
+        try:
+            self._save_cache_metadata(force=True)
+        except Exception as e:
+            logger.warning(f"[cache] Failed to flush metadata on shutdown: {e}")
 
     def get_lock(self, model_id: str) -> threading.Lock:
         lock = self.download_locks.get(model_id)
@@ -127,7 +158,7 @@ class ModelDownloader:
         if cached:
             with self._metadata_lock:
                 self._update_model_metadata(model_key)
-            self._save_cache_metadata()
+            self._save_cache_metadata(force=False)
         return cached
 
     def _dir_size_bytes(self, path: Path) -> int:

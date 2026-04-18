@@ -110,3 +110,19 @@ def test_get_lock_returns_single_instance_under_concurrency(tmp_path):
 
     first = locks[0]
     assert all(lock is first for lock in locks)
+
+
+def test_is_model_cached_uses_batched_metadata_flush(tmp_path):
+    d = ModelDownloader(cache_dir=str(tmp_path))
+    d._metadata_flush_interval_sec = 3600
+    d._metadata_flush_batch_updates = 50
+
+    model_dir = tmp_path / "org_repo"
+    _write_bytes(model_dir / "weights.bin", 8)
+
+    assert d.is_model_cached("org/repo") is True
+    assert d.metadata_path.exists() is False
+
+    d.flush_cache_metadata()
+    payload = json.loads(d.metadata_path.read_text(encoding="utf-8"))
+    assert payload["org_repo"]["last_access_ts"] > 0
