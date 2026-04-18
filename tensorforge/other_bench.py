@@ -16,6 +16,16 @@ from .model_manager import model_manager
 from .tf_logger import logger
 
 
+def _output_tail(payload: bytes | str | None, limit: int = 800) -> str:
+    if payload is None:
+        return ""
+    if isinstance(payload, bytes):
+        text = payload.decode(errors="ignore")
+    else:
+        text = str(payload)
+    return text[-limit:]
+
+
 class DiffusionBenchmark(BenchmarkRunner):
     BENCH_PROMPTS: ClassVar[list[str]] = [
         "A futuristic city at night with neon lights reflecting on wet streets, cyberpunk style",
@@ -57,23 +67,21 @@ class DiffusionBenchmark(BenchmarkRunner):
         t0 = time.perf_counter()
         try:
             cmd = self._build_worker_command()
-            out = subprocess.check_output(
+            out_bytes = subprocess.check_output(
                 cmd,
                 stderr=subprocess.STDOUT,
                 timeout=900,
                 **_subprocess_kwargs(),
             )
-            elapsed = time.perf_counter() - t0
-            lines = out.decode().strip().splitlines()
-            worker_metrics = json.loads(lines[-1])
         except subprocess.CalledProcessError as e:
             elapsed = time.perf_counter() - t0
-            details = (e.output or b"").decode(errors="ignore")[-500:]
+            details = _output_tail(e.output, limit=500)
             worker_metrics = {
+                "returncode": e.returncode,
                 "details": details,
                 **structured_error(
                     error="process_failed",
-                    error_stage="diffusion_worker_subprocess",
+                    error_stage="diffusion_worker_called_process",
                     trace_text=details,
                 ),
             }
@@ -82,19 +90,41 @@ class DiffusionBenchmark(BenchmarkRunner):
             worker_metrics = structured_error(
                 error="timeout",
                 error_type="timeout",
-                error_stage="diffusion_worker_subprocess",
+                error_stage="diffusion_worker_timeout",
             )
-        except (FileNotFoundError, json.JSONDecodeError) as e:
+        except FileNotFoundError as e:
             elapsed = time.perf_counter() - t0
             worker_metrics = {
                 "details": str(e),
                 **structured_error(
                     error="dependency_missing",
                     error_type="dependency_missing",
-                    error_stage="diffusion_worker_subprocess",
+                    error_stage="diffusion_worker_spawn",
                     trace_text=str(e),
                 ),
             }
+        except Exception as e:
+            elapsed = time.perf_counter() - t0
+            worker_metrics = structured_error(
+                error=type(e).__name__,
+                error_stage="diffusion_worker_subprocess",
+                trace_text=str(e),
+            )
+        else:
+            elapsed = time.perf_counter() - t0
+            output_text = _output_tail(out_bytes, limit=1000).strip()
+            lines = output_text.splitlines()
+            try:
+                worker_metrics = json.loads(lines[-1]) if lines else {}
+            except json.JSONDecodeError as e:
+                worker_metrics = {
+                    "details": output_text,
+                    **structured_error(
+                        error="invalid_worker_output",
+                        error_stage="diffusion_worker_parse_output",
+                        trace_text=str(e),
+                    ),
+                }
         worker_metrics = ensure_structured_error(
             worker_metrics, error_stage="diffusion_worker_subprocess"
         )
@@ -159,25 +189,39 @@ class CVBenchmark(BenchmarkRunner):
         t0 = time.perf_counter()
         try:
             cmd = self._build_worker_command()
-            out = subprocess.check_output(
+            out_bytes = subprocess.check_output(
                 cmd,
                 stderr=subprocess.STDOUT,
                 timeout=300,
                 **_subprocess_kwargs(),
             )
-            elapsed = time.perf_counter() - t0
-            worker_metrics = json.loads(out.decode().strip().splitlines()[-1])
         except subprocess.CalledProcessError as e:
             elapsed = time.perf_counter() - t0
-            details = (e.output or b"").decode(errors="ignore")[-800:]
+            details = _output_tail(e.output, limit=800)
             worker_metrics = {
+                "returncode": e.returncode,
                 "details": details,
                 **structured_error(
                     error="process_failed",
-                    error_stage="cv_worker_subprocess",
+                    error_stage="cv_worker_called_process",
                     trace_text=details,
                 ),
             }
+        except subprocess.TimeoutExpired:
+            elapsed = time.perf_counter() - t0
+            worker_metrics = structured_error(
+                error="timeout",
+                error_type="timeout",
+                error_stage="cv_worker_timeout",
+            )
+        except FileNotFoundError as e:
+            elapsed = time.perf_counter() - t0
+            worker_metrics = structured_error(
+                error="dependency_missing",
+                error_type="dependency_missing",
+                error_stage="cv_worker_spawn",
+                trace_text=str(e),
+            )
         except Exception as e:
             elapsed = time.perf_counter() - t0
             worker_metrics = structured_error(
@@ -185,6 +229,21 @@ class CVBenchmark(BenchmarkRunner):
                 error_stage="cv_worker_subprocess",
                 trace_text=str(e),
             )
+        else:
+            elapsed = time.perf_counter() - t0
+            output_text = _output_tail(out_bytes, limit=1000).strip()
+            lines = output_text.splitlines()
+            try:
+                worker_metrics = json.loads(lines[-1]) if lines else {}
+            except json.JSONDecodeError as e:
+                worker_metrics = {
+                    "details": output_text,
+                    **structured_error(
+                        error="invalid_worker_output",
+                        error_stage="cv_worker_parse_output",
+                        trace_text=str(e),
+                    ),
+                }
         worker_metrics = ensure_structured_error(worker_metrics, error_stage="cv_worker_subprocess")
 
         return {
@@ -237,13 +296,51 @@ class ASRBenchmark(BenchmarkRunner):
 
         try:
             cmd = self._build_worker_command(synthetic=False)
-            out = subprocess.check_output(
+            out_bytes = subprocess.check_output(
                 cmd,
                 stderr=subprocess.STDOUT,
                 timeout=600,
                 **_subprocess_kwargs(),
             )
-            return json.loads(out.decode().strip().splitlines()[-1])
+        except subprocess.CalledProcessError as e:
+            details = _output_tail(e.output, limit=1000)
+            logger.warning(f"  [warn] ASR worker failed with exit {e.returncode}: {details}")
+            return {
+                "details": details,
+                "returncode": e.returncode,
+                **structured_error(
+                    error="process_failed",
+                    error_stage="asr_worker_called_process",
+                    trace_text=details,
+                ),
+            }
+        except subprocess.TimeoutExpired as e:
+            details = _output_tail(e.output, limit=1000)
+            logger.warning(f"  [warn] ASR worker timeout: {details}")
+            return {
+                "details": details,
+                **structured_error(
+                    error="timeout",
+                    error_type="timeout",
+                    error_stage="asr_worker_timeout",
+                    trace_text=details,
+                ),
+            }
+        except FileNotFoundError as e:
+            logger.warning(f"  [warn] ASR worker spawn failed: {e}")
+            return structured_error(
+                error="dependency_missing",
+                error_type="dependency_missing",
+                error_stage="asr_worker_spawn",
+                trace_text=str(e),
+            )
+        except json.JSONDecodeError as e:
+            logger.warning(f"  [warn] ASR worker output parse failed: {e}")
+            return structured_error(
+                error="invalid_worker_output",
+                error_stage="asr_worker_parse_output",
+                trace_text=str(e),
+            )
         except Exception as e:
             logger.warning(f"  [warn] ASR worker failed: {e}")
             return structured_error(
@@ -251,17 +348,67 @@ class ASRBenchmark(BenchmarkRunner):
                 error_stage="asr_worker_subprocess",
                 trace_text=str(e),
             )
+        output_text = _output_tail(out_bytes, limit=1000).strip()
+        lines = output_text.splitlines()
+        try:
+            return json.loads(lines[-1]) if lines else {}
+        except json.JSONDecodeError as e:
+            logger.warning(f"  [warn] ASR worker output parse failed: {e}; tail={output_text}")
+            return {
+                "details": output_text,
+                **structured_error(
+                    error="invalid_worker_output",
+                    error_stage="asr_worker_parse_output",
+                    trace_text=str(e),
+                ),
+            }
 
     def _synthetic_benchmark(self) -> dict:
         try:
             cmd = self._build_worker_command(synthetic=True)
-            out = subprocess.check_output(
+            out_bytes = subprocess.check_output(
                 cmd,
                 stderr=subprocess.STDOUT,
                 timeout=120,
                 **_subprocess_kwargs(),
             )
-            return json.loads(out.decode().strip().splitlines()[-1])
+        except subprocess.CalledProcessError as e:
+            details = _output_tail(e.output, limit=1000)
+            logger.warning(f"  [warn] Synthetic ASR worker failed with exit {e.returncode}: {details}")
+            return {
+                "note": "asr_not_available",
+                "details": details,
+                "returncode": e.returncode,
+                **structured_error(
+                    error="process_failed",
+                    error_stage="asr_synthetic_called_process",
+                    trace_text=details,
+                ),
+            }
+        except subprocess.TimeoutExpired as e:
+            details = _output_tail(e.output, limit=1000)
+            logger.warning(f"  [warn] Synthetic ASR worker timeout: {details}")
+            return {
+                "note": "asr_not_available",
+                "details": details,
+                **structured_error(
+                    error="timeout",
+                    error_type="timeout",
+                    error_stage="asr_synthetic_timeout",
+                    trace_text=details,
+                ),
+            }
+        except FileNotFoundError as e:
+            logger.warning(f"  [warn] Synthetic ASR worker spawn failed: {e}")
+            return {
+                "note": "asr_not_available",
+                **structured_error(
+                    error="dependency_missing",
+                    error_type="dependency_missing",
+                    error_stage="asr_synthetic_spawn",
+                    trace_text=str(e),
+                ),
+            }
         except Exception as e:
             logger.warning(f"  [warn] Synthetic ASR failed: {e}")
             return {
@@ -269,6 +416,21 @@ class ASRBenchmark(BenchmarkRunner):
                 **structured_error(
                     error=type(e).__name__,
                     error_stage="asr_synthetic_subprocess",
+                    trace_text=str(e),
+                ),
+            }
+        output_text = _output_tail(out_bytes, limit=1000).strip()
+        lines = output_text.splitlines()
+        try:
+            return json.loads(lines[-1]) if lines else {}
+        except json.JSONDecodeError as e:
+            logger.warning(f"  [warn] Synthetic ASR output parse failed: {e}; tail={output_text}")
+            return {
+                "note": "asr_not_available",
+                "details": output_text,
+                **structured_error(
+                    error="invalid_worker_output",
+                    error_stage="asr_synthetic_parse_output",
                     trace_text=str(e),
                 ),
             }
