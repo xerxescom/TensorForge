@@ -8,12 +8,14 @@ import contextlib
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, ClassVar
+from typing import ClassVar
 
 from .collector import BenchmarkRunner, _subprocess_kwargs
 from .error_schema import classify_error_type, short_trace
 from .tf_logger import logger
+from .token_counting import heuristic_token_count, local_exact_token_count
 
 
 class LLMBenchmark(BenchmarkRunner):
@@ -87,7 +89,11 @@ class LLMBenchmark(BenchmarkRunner):
         tps_list = [r["tokens_per_s"] for r in run_results if r["tokens_per_s"] > 0]
         elapsed_list = [r["total_elapsed_s"] for r in run_results if r["total_elapsed_s"] > 0]
         total_toks = sum(r["tokens_generated"] for r in run_results)
+        total_toks_exact = sum(r.get("tokens_generated_exact", 0) for r in run_results)
+        total_toks_estimated = sum(r.get("tokens_generated_estimated", 0) for r in run_results)
         success_count = sum(1 for r in run_results if not r.get("error"))
+        exact_count = sum(1 for r in run_results if r.get("token_count_precision") == "exact")
+        estimated_count = len(run_results) - exact_count
 
         def _percentile(values: list[float], q: float) -> float:
             if not values:
@@ -114,6 +120,12 @@ class LLMBenchmark(BenchmarkRunner):
             if elapsed_list
             else 0,
             "tokens_generated": total_toks,
+            "tokens_generated_exact": total_toks_exact,
+            "tokens_generated_estimated": total_toks_estimated,
+            "token_count_precision_breakdown": {
+                "exact": exact_count,
+                "estimated": estimated_count,
+            },
             "n_runs": len(run_results),
             "per_run_detail": run_results,
         }
@@ -129,6 +141,11 @@ class LLMBenchmark(BenchmarkRunner):
         output_text = ""
         error = None
         tokens_estimated = False
+        token_count_precision = "exact"
+        token_count_source = "backend_usage"
+        tokens_generated_exact = 0
+        tokens_generated_estimated = 0
+        prompt_tokens = 0
 
         try:
             proc = subprocess.Popen(
@@ -154,23 +171,38 @@ class LLMBenchmark(BenchmarkRunner):
             if ttft_s == 0 and output_text:
                 ttft_s = total_elapsed_s
 
-            for line in (remaining_err or "").splitlines():
-                line = line.strip()
-                if "eval rate:" in line:
-                    with contextlib.suppress(Exception):
-                        tokens_per_s = float(
-                            line.split("eval rate:")[1].split("tokens/s")[0].strip()
-                        )
-                if "eval count:" in line:
-                    with contextlib.suppress(Exception):
-                        tokens_generated = int(line.split("eval count:")[1].split()[0])
+            parsed_usage = self._parse_ollama_verbose_usage(remaining_err or "")
+            prompt_tokens = parsed_usage["prompt_tokens"]
+            tokens_generated_exact = parsed_usage["completion_tokens"]
+            tokens_generated = tokens_generated_exact
+            if parsed_usage["eval_rate"] > 0:
+                tokens_per_s = parsed_usage["eval_rate"]
 
-            if tokens_per_s == 0 and output_text:
+            if tokens_generated == 0 and output_text:
+                local_tokens, source = local_exact_token_count(
+                    output_text,
+                    model_name=self.model_name,
+                    local_model_path=self.local_model_path,
+                )
+                if local_tokens is not None:
+                    tokens_generated_exact = local_tokens
+                    tokens_generated = local_tokens
+                    token_count_source = source or "local_tokenizer"
+                else:
+                    tokens_generated_estimated = heuristic_token_count(output_text)
+                    tokens_generated = tokens_generated_estimated
+                    tokens_estimated = True
+                    token_count_precision = "estimated"
+                    token_count_source = "heuristic"
+
+            if tokens_per_s == 0 and output_text and tokens_generated > 0:
                 decode_elapsed = max(total_elapsed_s - ttft_s, 1e-6)
-                est_tokens = int(len(output_text.split()) * 1.3)
-                tokens_per_s = round(est_tokens / decode_elapsed, 2) if decode_elapsed > 0 else 0
-                tokens_generated = tokens_generated or est_tokens
-                tokens_estimated = True
+                tokens_per_s = (
+                    round(tokens_generated / decode_elapsed, 2) if decode_elapsed > 0 else 0
+                )
+
+            if tokens_generated > 0 and not tokens_estimated and tokens_generated_exact == 0:
+                tokens_generated_exact = tokens_generated
 
         except FileNotFoundError:
             error = "ollama_not_found"
@@ -188,11 +220,37 @@ class LLMBenchmark(BenchmarkRunner):
             "total_elapsed_s": total_elapsed_s,
             "tokens_per_s": tokens_per_s,
             "tokens_generated": tokens_generated,
+            "tokens_generated_exact": tokens_generated_exact,
+            "tokens_generated_estimated": tokens_generated_estimated,
+            "prompt_tokens": prompt_tokens,
+            "token_count_precision": token_count_precision,
+            "token_count_source": token_count_source,
             "tokens_estimated": tokens_estimated,
             "error": error,
             "error_type": classify_error_type(str(error)) if error else None,
             "error_stage": "llm_subprocess" if error else None,
             "short_trace": short_trace(str(error)) if error else None,
+        }
+
+    def _parse_ollama_verbose_usage(self, stderr_text: str) -> dict[str, float | int]:
+        prompt_tokens = 0
+        completion_tokens = 0
+        eval_rate = 0.0
+        for line in stderr_text.splitlines():
+            line = line.strip()
+            if "prompt eval count:" in line:
+                with contextlib.suppress(Exception):
+                    prompt_tokens = int(line.split("prompt eval count:")[1].split()[0])
+            if "eval count:" in line and "prompt eval count:" not in line:
+                with contextlib.suppress(Exception):
+                    completion_tokens = int(line.split("eval count:")[1].split()[0])
+            if "eval rate:" in line:
+                with contextlib.suppress(Exception):
+                    eval_rate = float(line.split("eval rate:")[1].split("tokens/s")[0].strip())
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "eval_rate": eval_rate,
         }
 
     def _resolve_sampling_mode(self) -> str:
