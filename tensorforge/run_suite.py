@@ -20,6 +20,7 @@ from .config_manager import ConfigManager, apply_overrides
 from .error_schema import classify_error_type, short_trace, structured_error
 from .logging_utils import configure_logging
 from .tf_logger import logger
+from .token_counting import heuristic_token_count, local_exact_token_count
 
 
 @dataclass(frozen=True)
@@ -31,7 +32,7 @@ class ConcurrentTaskSpec:
     duration_s: float = 30.0
 
     @classmethod
-    def from_mapping(cls, cfg: dict[str, Any]) -> "ConcurrentTaskSpec":
+    def from_mapping(cls, cfg: dict[str, Any]) -> ConcurrentTaskSpec:
         return cls(
             task_type=cfg.get("type", "llm"),
             model=cfg.get("model", ""),
@@ -198,10 +199,14 @@ class ConcurrentStressTest:
 
     def _timed_llm(self, model: str, duration_s: float) -> dict:
         total_tokens = 0
+        total_tokens_exact = 0
+        total_tokens_estimated = 0
         model_load_s = 0.0
         warmup_s = 0.0
         failed_rounds = 0
         successful_rounds = 0
+        exact_rounds = 0
+        estimated_rounds = 0
         last_error_payload: dict[str, str] | None = None
         prompt = "Explain quantum entanglement briefly."
         warmup_prompt = "Reply with exactly one word: warm."
@@ -241,10 +246,13 @@ class ConcurrentStressTest:
                 return {
                     "measurement_mode": self.measurement_mode,
                     "tokens_generated": 0,
+                    "tokens_generated_exact": 0,
+                    "tokens_generated_estimated": 0,
                     "tokens_per_s": 0.0,
                     "tokens_per_s_end_to_end": 0.0,
                     "tokens_per_s_inference_only": 0.0,
-                    "tokens_estimated": True,
+                    "tokens_estimated": False,
+                    "token_count_precision_breakdown": {"exact": 0, "estimated": 0},
                     "model_load_s": 0.0,
                     "warmup_s": 0.0,
                     "inference_only_s": 0.0,
@@ -265,7 +273,7 @@ class ConcurrentStressTest:
             try:
                 one_t0 = time.perf_counter()
                 out = subprocess.run(
-                    ["ollama", "run", model, prompt],
+                    ["ollama", "run", model, prompt, "--verbose"],
                     capture_output=True,
                     text=True,
                     timeout=60,
@@ -275,7 +283,25 @@ class ConcurrentStressTest:
                 )
                 if self.measurement_mode == "cold_start" and model_load_s == 0.0:
                     model_load_s = time.perf_counter() - one_t0
-                total_tokens += int(len(out.stdout.split()) * 1.3)
+
+                stderr_text = getattr(out, "stderr", "") or ""
+                stdout_text = getattr(out, "stdout", "") or ""
+                completion_tokens = self._parse_ollama_eval_count(stderr_text)
+                if completion_tokens > 0:
+                    total_tokens += completion_tokens
+                    total_tokens_exact += completion_tokens
+                    exact_rounds += 1
+                else:
+                    local_tokens, _ = local_exact_token_count(stdout_text, model_name=model)
+                    if local_tokens is not None:
+                        total_tokens += local_tokens
+                        total_tokens_exact += local_tokens
+                        exact_rounds += 1
+                    else:
+                        est_tokens = heuristic_token_count(stdout_text)
+                        total_tokens += est_tokens
+                        total_tokens_estimated += est_tokens
+                        estimated_rounds += 1
                 successful_rounds += 1
             except subprocess.CalledProcessError as e:
                 failed_rounds += 1
@@ -304,10 +330,16 @@ class ConcurrentStressTest:
         result = {
             "measurement_mode": self.measurement_mode,
             "tokens_generated": total_tokens,
+            "tokens_generated_exact": total_tokens_exact,
+            "tokens_generated_estimated": total_tokens_estimated,
             "tokens_per_s": tokens_per_s_end_to_end,
             "tokens_per_s_end_to_end": tokens_per_s_end_to_end,
             "tokens_per_s_inference_only": tokens_per_s_inference_only,
-            "tokens_estimated": True,
+            "tokens_estimated": estimated_rounds > 0,
+            "token_count_precision_breakdown": {
+                "exact": exact_rounds,
+                "estimated": estimated_rounds,
+            },
             "model_load_s": round(model_load_s, 3),
             "warmup_s": round(warmup_s, 3),
             "inference_only_s": round(inference_only_s, 3),
@@ -319,6 +351,16 @@ class ConcurrentStressTest:
         if last_error_payload:
             result.update(last_error_payload)
         return result
+
+    def _parse_ollama_eval_count(self, stderr_text: str) -> int:
+        for line in stderr_text.splitlines():
+            s = line.strip()
+            if "eval count:" in s and "prompt eval count:" not in s:
+                try:
+                    return int(s.split("eval count:")[1].split()[0])
+                except Exception:
+                    return 0
+        return 0
 
     def _timed_diffusion(self, model: str, duration_s: float) -> dict:
         # Keep this as a subprocess to isolate OOM, while using fixed script + CLI args.
