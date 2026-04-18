@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 
+from tensorforge import collector
 from tensorforge.collector import GPUSample, GPUSampler
 
 
@@ -97,3 +98,24 @@ def test_summarize_supports_approximate_mode():
     assert stats["stats_precision_mode"] == "approximate"
     assert "p95" in stats["gpu_util_%"]
     assert stats["gpu_util_%"]["max"] >= stats["gpu_util_%"]["min"]
+
+
+def test_summarize_falls_back_without_numpy(monkeypatch):
+    monkeypatch.setattr(collector, "np", None)
+    t0 = time.time()
+    samples = [
+        GPUSample(
+            timestamp=t0 + i,
+            gpu_util=float(i),
+            mem_used_mb=float(100 + i),
+            mem_total_mb=1000.0,
+            power_w=float(50 + i),
+            temp_c=float(40 + i),
+            sm_clock_mhz=float(1000 + i),
+            mem_clock_mhz=5000.0,
+        )
+        for i in range(20)
+    ]
+    stats = GPUSampler.summarize(samples)
+    assert stats["sample_count"] == 20
+    assert stats["gpu_util_%"]["p95"] == 19.0
