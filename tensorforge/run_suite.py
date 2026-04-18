@@ -270,53 +270,21 @@ class ConcurrentStressTest:
         return result
 
     def _timed_diffusion(self, model: str, duration_s: float) -> dict:
-        # Keep this as a subprocess to isolate OOM, but avoid writing temp files.
-        script = f"""
-import json, time
-import torch
-from diffusers import AutoPipelineForText2Image
-
-n_images = 0
-total_steps = 0
-steps = 10
-mode = "{self.measurement_mode}"
-load_t0 = time.perf_counter()
-pipe = AutoPipelineForText2Image.from_pretrained(
-    "{model}", torch_dtype=torch.float16, variant="fp16"
-).to("cuda")
-model_load_s = time.perf_counter() - load_t0
-
-warmup_s = 0.0
-if mode == "steady_state":
-    warmup_t0 = time.perf_counter()
-    pipe(prompt="warmup prompt", num_inference_steps=steps)
-    warmup_s = time.perf_counter() - warmup_t0
-
-infer_t0 = time.perf_counter()
-t_end = time.time() + {duration_s}
-while time.time() < t_end:
-    pipe(prompt="a red apple", num_inference_steps=steps)
-    n_images += 1
-    total_steps += steps
-inference_only_s = time.perf_counter() - infer_t0
-end_to_end_s = model_load_s + warmup_s + inference_only_s
-
-print(json.dumps({{
-    "measurement_mode": mode,
-    "model_load_s": round(model_load_s, 3),
-    "warmup_s": round(warmup_s, 3),
-    "inference_only_s": round(inference_only_s, 3),
-    "end_to_end_s": round(end_to_end_s, 3),
-    "n_images": n_images,
-    "total_steps": total_steps,
-    "it_per_s": round(total_steps / max(end_to_end_s, 1e-6), 3),
-    "it_per_s_end_to_end": round(total_steps / max(end_to_end_s, 1e-6), 3),
-    "it_per_s_inference_only": round(total_steps / max(inference_only_s, 1e-6), 3),
-}}))
-"""
+        # Keep this as a subprocess to isolate OOM, while using fixed script + CLI args.
+        cmd = [
+            sys.executable,
+            "-m",
+            "tensorforge.diffusion_worker",
+            "--model",
+            model,
+            "--duration",
+            str(duration_s),
+            "--mode",
+            self.measurement_mode,
+        ]
         try:
             out = subprocess.check_output(
-                [sys.executable, "-c", script],
+                cmd,
                 timeout=duration_s + 30,
                 **_subprocess_kwargs(),
             )
