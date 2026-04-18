@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
 import yaml
+try:
+    from jsonschema import Draft202012Validator
+except ImportError:  # pragma: no cover - optional dependency fallback
+    Draft202012Validator = None
 
 from .tf_logger import logger
 
@@ -140,17 +144,19 @@ class ConfigManager:
         return self._config
 
     def _dict_to_config(self, data: dict[str, Any]) -> BenchmarkConfig:
-        default_settings = data.get("default_settings", {})
-        gpu_thresholds = data.get("gpu_thresholds", {})
-        models = data.get("models", {})
-        network = data.get("network", {})
-        cache = data.get("cache", {})
-        error_handling = data.get("error_handling", {})
-        llm_model_cfg = models.get("llm", {})
-        diffusion_model_cfg = models.get("diffusion", {})
-        cv_model_cfg = models.get("cv", {})
-        asr_model_cfg = models.get("asr", {})
-        concurrent_test = data.get("concurrent_test", {})
+        _validate_config_schema(data)
+
+        default_settings = _as_mapping_block(data.get("default_settings"), "default_settings")
+        gpu_thresholds = _as_mapping_block(data.get("gpu_thresholds"), "gpu_thresholds")
+        models = _as_mapping_block(data.get("models"), "models")
+        network = _as_mapping_block(data.get("network"), "network")
+        cache = _as_mapping_block(data.get("cache"), "cache")
+        error_handling = _as_mapping_block(data.get("error_handling"), "error_handling")
+        llm_model_cfg = _as_mapping_block(models.get("llm"), "models.llm")
+        diffusion_model_cfg = _as_mapping_block(models.get("diffusion"), "models.diffusion")
+        cv_model_cfg = _as_mapping_block(models.get("cv"), "models.cv")
+        asr_model_cfg = _as_mapping_block(models.get("asr"), "models.asr")
+        concurrent_test = _as_mapping_block(data.get("concurrent_test"), "concurrent_test")
 
         llm_prompts = None
         if (
@@ -355,3 +361,89 @@ def _validate_critical_fields(cfg: BenchmarkConfig):
 
 
 config_manager = ConfigManager()
+
+
+_CONFIG_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "default_settings": {
+            "type": "object",
+            "properties": {
+                "sample_interval_s": {"type": "number"},
+                "warmup_s": {"type": "number"},
+                "timeout_s": {"type": "integer"},
+                "max_raw_samples": {"type": "integer"},
+                "adaptive_sampling": {"type": "boolean"},
+                "stats_precision_mode": {"type": "string"},
+            },
+            "additionalProperties": True,
+        },
+        "gpu_thresholds": {"type": "object", "additionalProperties": True},
+        "models": {
+            "type": "object",
+            "properties": {
+                "llm": {"type": "object", "additionalProperties": True},
+                "diffusion": {"type": "object", "additionalProperties": True},
+                "cv": {"type": "object", "additionalProperties": True},
+                "asr": {"type": "object", "additionalProperties": True},
+            },
+            "additionalProperties": True,
+        },
+        "network": {
+            "type": "object",
+            "properties": {
+                "timeout": {"type": "integer"},
+                "max_retries": {"type": "integer"},
+                "retry_delay": {"type": "number"},
+                "use_proxy": {"type": "boolean"},
+                "proxy_host": {"type": ["string", "null"]},
+                "proxy_port": {"type": ["integer", "null"]},
+                "verify_ssl": {"type": "boolean"},
+                "enable_hf_transfer": {"type": "boolean"},
+                "preferred_endpoints": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+            "additionalProperties": True,
+        },
+        "cache": {"type": "object", "additionalProperties": True},
+        "error_handling": {"type": "object", "additionalProperties": True},
+        "concurrent_test": {"type": "object", "additionalProperties": True},
+    },
+    "additionalProperties": True,
+}
+
+
+def _path_to_str(path: list[Any]) -> str:
+    return ".".join(str(p) for p in path) if path else "<root>"
+
+
+def _validate_config_schema(data: dict[str, Any]):
+    if Draft202012Validator is None:
+        logger.warning("jsonschema is not installed; skipping config schema validation")
+        return
+
+    validator = Draft202012Validator(_CONFIG_SCHEMA)
+    errors = sorted(validator.iter_errors(data), key=lambda e: list(e.path))
+    if not errors:
+        return
+
+    for err in errors[:20]:
+        logger.warning(
+            f"Config schema validation failed at '{_path_to_str(list(err.path))}': {err.message}"
+        )
+
+    if len(errors) > 20:
+        logger.warning(f"Config schema validation has {len(errors) - 20} more issue(s) omitted")
+
+
+def _as_mapping_block(value: Any, path: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    logger.warning(
+        f"Config block '{path}' must be a mapping, got {type(value).__name__}; using defaults"
+    )
+    return {}

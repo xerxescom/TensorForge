@@ -113,3 +113,50 @@ def test_apply_overrides_cv_batch_size_validation_error():
     cfg = BenchmarkConfig()
     with pytest.raises(ValueError, match="cv_batch_size"):
         apply_overrides(cfg, {"cv_batch_size": "0"})
+
+
+def test_load_config_fallback_when_top_level_block_is_not_mapping(tmp_path):
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        textwrap.dedent(
+            """
+            default_settings: "oops"
+            network:
+              - bad
+              - block
+            cache: 123
+            models: "wrong-type"
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+
+    cm = ConfigManager(str(cfg_path))
+    cfg = cm.load_config()
+
+    assert cfg.sample_interval_s == 0.5
+    assert cfg.network_timeout == 300
+    assert cfg.cache_base_dir == "models_cache"
+    assert cfg.llm_model == "llama3.1:8b"
+
+
+def test_load_config_fallback_when_models_child_block_is_not_mapping(tmp_path):
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        textwrap.dedent(
+            """
+            models:
+              llm:
+                - not
+                - mapping
+              cv: "bad"
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+
+    cm = ConfigManager(str(cfg_path))
+    cfg = cm.load_config()
+
+    assert cfg.llm_model == "llama3.1:8b"
+    assert cfg.cv_batch_size == 1
