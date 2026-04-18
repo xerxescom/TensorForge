@@ -10,7 +10,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +20,41 @@ from .config_manager import ConfigManager, apply_overrides
 from .error_schema import classify_error_type, short_trace, structured_error
 from .logging_utils import configure_logging
 from .tf_logger import logger
+
+
+@dataclass(frozen=True)
+class ConcurrentTaskSpec:
+    """Normalized concurrent task input."""
+
+    task_type: str
+    model: str = ""
+    duration_s: float = 30.0
+
+    @classmethod
+    def from_mapping(cls, cfg: dict[str, Any]) -> "ConcurrentTaskSpec":
+        return cls(
+            task_type=cfg.get("type", "llm"),
+            model=cfg.get("model", ""),
+            duration_s=cfg.get("duration_s", 30),
+        )
+
+    @property
+    def baseline_key(self) -> str:
+        return f"{self.task_type}_{self.model}"
+
+
+@dataclass(frozen=True)
+class ConcurrentTaskResult:
+    """Unified concurrent task execution output."""
+
+    task_type: str
+    model: str
+    metrics: dict[str, Any]
+
+    def as_dict(self) -> dict[str, Any]:
+        payload = {"type": self.task_type, "model": self.model}
+        payload.update(self.metrics)
+        return payload
 
 
 class ConcurrentStressTest:
@@ -33,7 +68,7 @@ class ConcurrentStressTest:
         measurement_mode: str = "cold_start",
         stats_precision_mode: str = "exact",
     ):
-        self.tasks = tasks
+        self.tasks = [self._coerce_task_spec(task_cfg) for task_cfg in tasks]
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.gpu_index = gpu_index
@@ -43,6 +78,10 @@ class ConcurrentStressTest:
         self.stats_precision_mode = (
             stats_precision_mode if stats_precision_mode in {"exact", "approximate"} else "exact"
         )
+        self._task_executors: dict[str, Any] = {
+            "llm": self._timed_llm,
+            "diffusion": self._timed_diffusion,
+        }
 
     def run(self) -> dict:
         logger.info(f"[Concurrent] Starting {len(self.tasks)} tasks simultaneously ...")
@@ -81,7 +120,7 @@ class ConcurrentStressTest:
         for cfg, conc in zip(self.tasks, concurrent_metrics, strict=True):
             if conc is None:
                 continue
-            key = f"{cfg['type']}_{cfg.get('model', '')}"
+            key = cfg.baseline_key
             baseline = baselines.get(key, {})
             for metric in [
                 "tokens_per_s",
@@ -122,28 +161,40 @@ class ConcurrentStressTest:
             return None
         return round(num / den, 4)
 
-    def _run_one_task(self, cfg: dict, idx: int, results: list, barrier: threading.Barrier):
-        t_type = cfg.get("type", "llm")
-        duration = cfg.get("duration_s", 30)
-        model = cfg.get("model", "")
-        metrics: dict = {"type": t_type, "model": model}
-
+    def _run_one_task(
+        self,
+        cfg: ConcurrentTaskSpec | dict[str, Any],
+        idx: int,
+        results: list,
+        barrier: threading.Barrier,
+    ):
+        task = self._coerce_task_spec(cfg)
+        metrics: dict[str, Any] = {"type": task.task_type, "model": task.model}
         try:
             barrier.wait()
-            if t_type == "llm":
-                metrics.update(self._timed_llm(model, duration))
-            elif t_type == "diffusion":
-                metrics.update(self._timed_diffusion(model, duration))
+            metrics = self._execute_task(task).as_dict()
         except Exception as e:
             metrics.update(
                 structured_error(
                     error=e,
-                    error_stage=f"concurrent_{t_type}_subprocess",
+                    error_stage=f"concurrent_{task.task_type}_subprocess",
                     trace_text=str(e),
                 )
             )
 
         results[idx] = metrics
+
+    def _coerce_task_spec(self, cfg: ConcurrentTaskSpec | dict[str, Any]) -> ConcurrentTaskSpec:
+        if isinstance(cfg, ConcurrentTaskSpec):
+            return cfg
+        return ConcurrentTaskSpec.from_mapping(cfg)
+
+    def _execute_task(self, cfg: ConcurrentTaskSpec) -> ConcurrentTaskResult:
+        runner = self._task_executors.get(cfg.task_type)
+        if runner is None:
+            raise ValueError(f"unsupported concurrent task type: {cfg.task_type}")
+        metrics = runner(cfg.model, cfg.duration_s)
+        return ConcurrentTaskResult(task_type=cfg.task_type, model=cfg.model, metrics=metrics)
 
     def _timed_llm(self, model: str, duration_s: float) -> dict:
         total_tokens = 0
@@ -300,15 +351,9 @@ class ConcurrentStressTest:
         logger.info("[Concurrent] Collecting single-task baselines ...")
         baselines: dict[str, dict] = {}
         for cfg in self.tasks:
-            key = f"{cfg['type']}_{cfg.get('model', '')}"
+            key = cfg.baseline_key
             try:
-                if cfg["type"] == "llm":
-                    m = self._timed_llm(cfg.get("model", ""), cfg.get("duration_s", 20))
-                elif cfg["type"] == "diffusion":
-                    m = self._timed_diffusion(cfg.get("model", ""), cfg.get("duration_s", 20))
-                else:
-                    m = {}
-                baselines[key] = m
+                baselines[key] = self._execute_task(cfg).metrics
             except Exception as e:
                 baselines[key] = {"error": str(e)}
         return baselines
